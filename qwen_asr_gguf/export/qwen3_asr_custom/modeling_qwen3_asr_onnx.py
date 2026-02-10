@@ -7,6 +7,7 @@ from typing import Optional
 class Qwen3ASRFrontendFullOnnx(nn.Module):
     """
     Qwen3-ASR 完整前端 (DirectML 深度优化版)
+    兼容 ASR (896) 和 Aligner (1024) 维度
     """
     def __init__(self, audio_tower):
         super().__init__()
@@ -14,6 +15,8 @@ class Qwen3ASRFrontendFullOnnx(nn.Module):
         self.conv2d2 = audio_tower.conv2d2
         self.conv2d3 = audio_tower.conv2d3
         self.conv_out = audio_tower.conv_out
+        # 记录输出维度，避免硬编码
+        self.d_model = audio_tower.conv_out.out_features
         self.register_buffer("pos_embed_table", audio_tower.positional_embedding.positional_embedding)
         
     def _get_feat_extract_output_lengths(self, input_lengths):
@@ -37,8 +40,10 @@ class Qwen3ASRFrontendFullOnnx(nn.Module):
         x = x.permute(0, 3, 1, 2).contiguous()
         x = x.flatten(2, 3) 
         x = self.conv_out(x)
+        # 位置编码切片依然使用固定的 13
         pos_embed = self.pos_embed_table[:13, :].unsqueeze(0)
         x = x + pos_embed
+        # 这里使用 self.d_model 以兼容不同模型
         x = x.flatten(0, 1).unsqueeze(0)
         x = x[:, :expected_len, :]
         return x
@@ -102,25 +107,12 @@ class Qwen3ASRBackendOnnx(nn.Module):
         return hidden_states
 
 class Qwen3ASREncoderFullOnnx(nn.Module):
-    """
-    Qwen3-ASR 完整音频编码器 (Combined System)
-    Mel -> Frontend -> Backend -> LLM Hidden States
-    """
     def __init__(self, audio_tower):
         super().__init__()
         self.frontend = Qwen3ASRFrontendFullOnnx(audio_tower)
         self.backend = Qwen3ASRBackendOnnx(audio_tower)
         
     def forward(self, input_features: torch.Tensor, attention_mask: Optional[torch.Tensor] = None):
-        """
-        Args:
-            input_features: (B, 128, T)
-            attention_mask: (B, 1, T_down, T_down) -> 用于隔离窗口，设为 None 则为全屏注意力
-        """
-        # 1. 前端处理 (分块卷积 + 位置编码)
         hidden_states = self.frontend(input_features)
-        
-        # 2. 后端处理 (Transformer)
         last_hidden_state = self.backend(hidden_states, attention_mask=attention_mask)
-        
         return last_hidden_state
