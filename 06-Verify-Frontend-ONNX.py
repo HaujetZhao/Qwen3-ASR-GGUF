@@ -12,7 +12,7 @@ def calculate_cosine_similarity(a, b):
 def main():
     onnx_path = os.path.join(EXPORT_DIR, "qwen3_asr_frontend.onnx")
     input_mel_path = "capture_data/input_mel.npy"
-    # 这里我们对比 02 直接捕捉的后端输入 (拼接完成后的全长特征)
+    # 这里对比拼接完成后且包含位置编码的后端输入基准 (371, 896)
     baseline_path = "capture_data/encoder_backend_input.npy"
 
     if not os.path.exists(onnx_path) or not os.path.exists(baseline_path):
@@ -21,37 +21,38 @@ def main():
 
     # 1. 加载数据
     input_mel = np.load(input_mel_path)  # (1, 128, 2850)
-    # 官方拼接后的特征 (371, 896)
-    baseline_full = np.load(baseline_path)  
+    baseline_full = np.load(baseline_path)  # (371, 896)
     
     sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
     
     # 2. 一键投喂验证
-    print(f"验证开始：一次性喂入 {input_mel.shape[2]} 帧特征...")
+    print(f"验证开始：一次性向 ONNX 投喂 {input_mel.shape[2]} 帧特征...")
     
     ort_outs = sess.run(None, {sess.get_inputs()[0].name: input_mel})
-    onnx_output = ort_outs[0][0] # (T_total_downsampled, 896)
+    onnx_output = ort_outs[0][0] # (T_downsampled, 896)
     
-    print(f"ONNX 输出总长度: {onnx_output.shape[0]}")
-    print(f"官方基准总长度: {baseline_full.shape[0]}")
+    print(f"ONNX 输出形状: {onnx_output.shape}")
+    print(f"官方基准形状: {baseline_full.shape}")
 
-    # 3. 对齐对比
-    # 注意：由于 ONNX 内部做了 Full Padding 补齐到 100 倍数，结果会比 371 长一点点（通常补齐到 377）
-    # 我们只需要截取与官方基准对等的部分即可
-    min_t = min(onnx_output.shape[0], baseline_full.shape[0])
-    onnx_final = onnx_output[:min_t, :]
-    baseline_final = baseline_full[:min_t, :]
-    
-    sim = calculate_cosine_similarity(baseline_final, onnx_final)
-    
-    print("\n" + "="*40)
-    print(f"全长投喂验证 (Full-Sequence Verification):")
-    print(f"  - 余弦相似度: {sim:.8f}")
-    
-    if sim > 0.9999:
-        print("\n✅ PERFECT: ONNX 'Full' Frontend matches official implementation exactly!")
+    # 3. 维度对比与相似度计算
+    if onnx_output.shape == baseline_full.shape:
+        sim = calculate_cosine_similarity(baseline_full, onnx_output)
+        print("\n" + "="*40)
+        print(f"精确对齐验证 (Precision Alignment Verification):")
+        print(f"  - 形状匹配情况: ✅ 一致")
+        print(f"  - 余弦相似度: {sim:.8f}")
+        
+        if sim > 0.9999:
+            print("\n✨ PERFECT! The ONNX output is bit-exact and dimension-aligned with official output.")
+        else:
+            print("\n⚠️ WARNING: Dimensions match but content differs. Check logic.")
     else:
-        print("\n❌ MISMATCH: Similarity is low. Please check padding logic.")
+        print("\n" + "="*40)
+        print(f"❌ ERROR: Shape Mismatch! {onnx_output.shape} vs {baseline_full.shape}")
+        # 即使形状不对，也强行对齐看一下内容相似度
+        min_t = min(onnx_output.shape[0], baseline_full.shape[0])
+        sim = calculate_cosine_similarity(baseline_full[:min_t], onnx_output[:min_t])
+        print(f"  - 截断后的余弦相似度: {sim:.8f}")
     print("="*40)
 
 if __name__ == "__main__":

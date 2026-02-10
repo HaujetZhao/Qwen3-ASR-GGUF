@@ -23,12 +23,11 @@ def export_frontend():
     frontend_model = Qwen3ASRFrontendFullOnnx(audio_tower)
     frontend_model.eval()
     
-    # Dummy 输入
+    # Dummy 输入：使用 2850 帧进行导出，并设置动态轴
     dummy_input = torch.randn(1, 128, 2850)
     
-    print(f"Exporting FULL Frontend (with Positional Embedding) to ONNX...")
+    print(f"Exporting PRECISION Frontend to ONNX...")
     
-    # 使用标准导出模式 (为了避免 dynamo 可能对复杂 reshape 处理不当，我们这次先用普通导出)
     torch.onnx.export(
         frontend_model,
         (dummy_input,),
@@ -43,7 +42,7 @@ def export_frontend():
         do_constant_folding=True
     )
     
-    print(f"✅ Full Frontend ONNX export complete!")
+    print(f"✅ Precision Frontend ONNX export complete!")
 
 if __name__ == "__main__":
     export_frontend()
