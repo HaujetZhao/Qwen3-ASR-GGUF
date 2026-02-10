@@ -1,12 +1,12 @@
 # coding=utf-8
 import os
 import torch
-from export_config import MODEL_DIR
+from export_config import ASR_MODEL_DIR
 from qwen_asr import Qwen3ASRModel
 
 def main():
     # 1. 确保模型路径为字符串
-    model_path = str(MODEL_DIR)
+    model_path = str(ASR_MODEL_DIR)
     print(f"Loading model from: {model_path}")
     
     if not os.path.exists(model_path):

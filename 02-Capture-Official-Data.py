@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.absolute()))
 
 from qwen_asr import Qwen3ASRModel
-from export_config import MODEL_DIR
+from export_config import ASR_MODEL_DIR
 
 def save_tensor(name, tensor, folder):
     """将 Tensor 转换为 Numpy 并保存"""
@@ -34,7 +34,7 @@ def main():
     output_folder = "capture_data"
     os.makedirs(output_folder, exist_ok=True)
     
-    model_path = str(MODEL_DIR)
+    model_path = str(ASR_MODEL_DIR)
     audio_path = "test.mp3"
     
     # 2. 加载模型

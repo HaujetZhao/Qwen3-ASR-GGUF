@@ -2,18 +2,18 @@
 import os
 import numpy as np
 from transformers import WhisperFeatureExtractor
-from export_config import MODEL_DIR, EXPORT_DIR
+from export_config import ASR_MODEL_DIR, EXPORT_DIR
 
 # 目标输出路径，确保 model 文件夹存在
 os.makedirs(EXPORT_DIR, exist_ok=True)
 OUTPUT_FILE = os.path.join(EXPORT_DIR, "mel_filters.npy")
 
 def main():
-    print(f"Loading feature extractor from: {MODEL_DIR}")
+    print(f"Loading feature extractor from: {ASR_MODEL_DIR}")
     
     # Qwen3-ASR 使用的是 WhisperFeatureExtractor
     try:
-        fe = WhisperFeatureExtractor.from_pretrained(MODEL_DIR)
+        fe = WhisperFeatureExtractor.from_pretrained(ASR_MODEL_DIR)
         
         # 提取 mel_filters
         if hasattr(fe, 'mel_filters'):
