@@ -12,8 +12,8 @@ def calculate_cosine_similarity(a, b):
 def main():
     onnx_path = os.path.join(EXPORT_DIR, "qwen3_asr_frontend.onnx")
     input_mel_path = "capture_data/input_mel.npy"
-    # 这里我们对比 02 直接捕获的卷积层原生输出 (Chunked)
-    baseline_path = "capture_data/encoder_frontend_output.npy"
+    # 这里我们对比 02 直接捕捉的后端输入 (拼接完成后的全长特征)
+    baseline_path = "capture_data/encoder_backend_input.npy"
 
     if not os.path.exists(onnx_path) or not os.path.exists(baseline_path):
         print("❌ 缺失文件，请确保已运行导出并捕获过数据。")
@@ -21,54 +21,37 @@ def main():
 
     # 1. 加载数据
     input_mel = np.load(input_mel_path)  # (1, 128, 2850)
-    baseline_chunks = np.load(baseline_path)  # (29, 13, 896)
+    # 官方拼接后的特征 (371, 896)
+    baseline_full = np.load(baseline_path)  
     
     sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
     
-    # 2. 模拟官方 Chunk 逻辑进行验证
-    # 官方将音频由于 n_window=50, 所以切成 100 帧一格
-    chunk_size = 100
-    n_mel_frames = input_mel.shape[2]
+    # 2. 一键投喂验证
+    print(f"验证开始：一次性喂入 {input_mel.shape[2]} 帧特征...")
     
-    print(f"验证开始：音频总帧数 {n_mel_frames}, 预计 Chunk 数 {baseline_chunks.shape[0]}")
+    ort_outs = sess.run(None, {sess.get_inputs()[0].name: input_mel})
+    onnx_output = ort_outs[0][0] # (T_total_downsampled, 896)
     
-    similarities = []
-    
-    for i in range(baseline_chunks.shape[0]):
-        start = i * chunk_size
-        end = min(start + chunk_size, n_mel_frames)
-        
-        # 获取当前块输入
-        mel_chunk = input_mel[:, :, start:end]
-        
-        # 如果长度不足 100，需要像官方那样进行 Padding (这里我们观察 02 发现它捕获时已经对应了逻辑)
-        # 官方的 pad_sequence 默认补 0
-        if mel_chunk.shape[2] < chunk_size:
-            pad_width = chunk_size - mel_chunk.shape[2]
-            mel_chunk = np.pad(mel_chunk, ((0, 0), (0, 0), (0, pad_width)), mode='constant')
-            
-        # ONNX 推理
-        ort_outs = sess.run(None, {sess.get_inputs()[0].name: mel_chunk})
-        onnx_chunk_out = ort_outs[0][0] # (13, 896)
-        
-        # 获取对应的基准块
-        target_chunk = baseline_chunks[i] # (13, 896)
-        
-        sim = calculate_cosine_similarity(target_chunk, onnx_chunk_out)
-        similarities.append(sim)
+    print(f"ONNX 输出总长度: {onnx_output.shape[0]}")
+    print(f"官方基准总长度: {baseline_full.shape[0]}")
 
-    avg_sim = np.mean(similarities)
-    print("\n" + "="*40)
-    print(f"分块验证完毕 (Chunk-wise Verification):")
-    print(f"  - 平均余弦相似度: {avg_sim:.8f}")
-    print(f"  - 最小相似度: {min(similarities):.8f}")
+    # 3. 对齐对比
+    # 注意：由于 ONNX 内部做了 Full Padding 补齐到 100 倍数，结果会比 371 长一点点（通常补齐到 377）
+    # 我们只需要截取与官方基准对等的部分即可
+    min_t = min(onnx_output.shape[0], baseline_full.shape[0])
+    onnx_final = onnx_output[:min_t, :]
+    baseline_final = baseline_full[:min_t, :]
     
-    if avg_sim > 0.9999:
-        print("\n✅ PERFECT: ONNX implementation is bit-exact with Torch Chunks!")
-    elif avg_sim > 0.99:
-        print("\n✅ SUCCESS: High similarity achieved.")
+    sim = calculate_cosine_similarity(baseline_final, onnx_final)
+    
+    print("\n" + "="*40)
+    print(f"全长投喂验证 (Full-Sequence Verification):")
+    print(f"  - 余弦相似度: {sim:.8f}")
+    
+    if sim > 0.9999:
+        print("\n✅ PERFECT: ONNX 'Full' Frontend matches official implementation exactly!")
     else:
-        print("\n❌ FAILURE: Mismatch detected. Please check padding or windowing.")
+        print("\n❌ MISMATCH: Similarity is low. Please check padding logic.")
     print("="*40)
 
 if __name__ == "__main__":
