@@ -28,7 +28,7 @@ def main():
     mask_input = np.zeros((1, 1, seq_len, seq_len), dtype=np.float32)
     
     # 3. 推理
-    sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+    sess = ort.InferenceSession(onnx_path, providers=["DmlExecutionProvider", "CPUExecutionProvider"])
     
     print(f"Running Final Backend ONNX Verification (Full Attention Mode)...")
     ort_outs = sess.run(None, {
