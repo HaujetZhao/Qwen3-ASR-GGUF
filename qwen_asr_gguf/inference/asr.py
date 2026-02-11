@@ -170,7 +170,7 @@ class QwenASREngine:
         # 填充结果（内核输出标准化）
         result.text = prefix_text + stable_text_acc
         result.stable_tokens = stable_tokens
-        result.t_prefill = prefill_time / 1000
+        result.t_prefill = prefill_time
         result.t_generate = gen_time
         result.n_prefill = total_len
         result.n_generate = n_gen_tokens

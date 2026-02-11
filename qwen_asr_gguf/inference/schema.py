@@ -62,17 +62,17 @@ class ForcedAlignResult:
 class AlignerConfig:
     """对齐引擎配置"""
     model_dir: str
-    encoder_fn: str = "qwen3_aligner_encoder.int8.onnx"
+    encoder_fn: str = "qwen3_aligner_encoder.fp16.onnx"
     llm_fn: str = "qwen3_aligner_llm.q8_0.gguf"
     mel_fn: str = "mel_filters.npy"
     use_dml: bool = False
-    n_ctx: int = 8192
+    n_ctx: int = 4096
 
 @dataclass
 class ASREngineConfig:
     """ASR 识别引擎配置"""
     model_dir: str
-    encoder_fn: str = "qwen3_asr_encoder.int8.onnx"
+    encoder_fn: str = "qwen3_asr_encoder.fp16.onnx"
     llm_fn: str = "qwen3_asr_llm.q8_0.gguf"
     mel_fn: str = "mel_filters.npy"
     use_dml: bool = False

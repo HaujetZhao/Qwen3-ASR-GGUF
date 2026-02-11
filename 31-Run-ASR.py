@@ -6,21 +6,26 @@ from pathlib import Path
 # 添加项目路径
 sys.path.append(str(Path(__file__).parent.absolute()))
 
-from qwen_asr_gguf.inference import QwenASREngine, itn, load_audio, ASREngineConfig
+from qwen_asr_gguf.inference import QwenASREngine, itn, load_audio, ASREngineConfig, AlignerConfig
 
 def main():
     # 路径配置
     model_dir = "model"
     audio_path = "睡前消息.m4a"
     
-    # 1. 初始化引擎 (使用标准化 Config)
+    # 配置引擎
     config = ASREngineConfig(
         model_dir=model_dir, 
-        enable_aligner=False,  
+        use_dml = True, 
+        encoder_fn = "qwen3_asr_encoder.fp16.onnx" ,
+        enable_aligner = True, 
+        align_config = AlignerConfig(
+            use_dml=True, 
+            encoder_fn = "qwen3_aligner_encoder.fp16.onnx" 
+        )
     )
-    config.use_dml = True
-    config.align_config.use_dml = True
 
+    # 初始化引擎
     engine = QwenASREngine(config=config)
     
     # 2. 加载音频
