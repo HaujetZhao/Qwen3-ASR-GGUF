@@ -8,7 +8,7 @@ import codecs
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-from .schema import ForcedAlignItem, ForcedAlignResult
+from .schema import ForcedAlignItem, ForcedAlignResult, AlignerConfig
 from .encoder import FastWhisperMel, get_feat_lengths
 from .utils import normalize_language_name, validate_language
 from . import llama
@@ -130,12 +130,17 @@ class AlignerProcessor:
 
 class QwenForcedAligner:
     """Qwen3 强制对齐器 (GGUF 后端)"""
-    def __init__(self, encoder_onnx: str, llm_gguf: str, mel_filters: str, verbose: bool = True, use_dml: bool = True):
-        self.verbose = verbose
-        if verbose: print("--- [Aligner] 初始化对齐器 ---")
+    def __init__(self, config: AlignerConfig):
+        self.verbose = config.verbose
+        encoder_onnx = os.path.join(config.model_dir, config.encoder_fn)
+        llm_gguf = os.path.join(config.model_dir, config.llm_fn)
+        mel_filters = os.path.join(config.model_dir, config.mel_fn)
+        use_dml = config.use_dml
+
+        if self.verbose: print(f"--- [Aligner] 初始化对齐器 (DML: {use_dml}) ---")
         self.model = llama.LlamaModel(llm_gguf)
         self.embedding_table = llama.get_token_embeddings_gguf(llm_gguf)
-        self.ctx = llama.LlamaContext(self.model, n_ctx=8192, n_batch=4096, embeddings=False)
+        self.ctx = llama.LlamaContext(self.model, n_ctx=config.n_ctx, n_batch=4096, embeddings=False)
         
         opt = ort.SessionOptions()
         providers = ['CPUExecutionProvider']
@@ -152,19 +157,22 @@ class QwenForcedAligner:
         self.ID_TIMESTAMP = self.model.token_to_id("<timestamp>")
         self.STEP_MS = 80.0
 
-    def align(self, audio: np.ndarray, text: str, language: str = "Chinese") -> ForcedAlignResult:
-        """执行强制对齐"""
+    def align(self, audio: np.ndarray, text: str, language: str = "Chinese", offset_sec: float = 0.0) -> ForcedAlignResult:
+        """执行强制对齐，支持起始偏移量叠加"""
         # 语言归一化与校验
         if language:
             language = normalize_language_name(language)
             validate_language(language)
 
-        t0 = time.time()
-        # 1. 编码
+        t_start = time.time()
+        
+        # 1. 编码 (Encoder Stage)
+        t_enc_start = time.time()
         mel = self.mel_extractor(audio, dtype=self.input_dtype)
         t_out = get_feat_lengths(mel.shape[1])
         audio_embd = self.encoder.run(None, {"input_features": mel[np.newaxis, ...], "attention_mask": np.zeros((1, 1, t_out, t_out), dtype=self.input_dtype)})[0]
         if audio_embd.ndim == 3: audio_embd = audio_embd[0]
+        t_enc = time.time() - t_enc_start
 
         # 2. 分词与构建 Prompt (必须完整注入音频序列)
         words = self.processor.tokenize(text, language)
@@ -199,7 +207,8 @@ class QwenForcedAligner:
         full_embd[len(pre_ids):len(pre_ids)+audio_embd.shape[0]] = audio_embd
         full_embd[len(pre_ids)+audio_embd.shape[0]:] = self.embedding_table[post_ids]
 
-        # 3. 推理获取 Logits
+        # 3. 推理获取 Logits (Decoder Stage)
+        t_dec_start = time.time()
         pos_base = np.arange(n_total, dtype=np.int32)
         pos_arr = np.concatenate([pos_base, pos_base, pos_base, np.zeros(n_total, dtype=np.int32)])
         batch = llama.LlamaBatch(n_total * 4, embd_dim=1024)
@@ -208,6 +217,7 @@ class QwenForcedAligner:
         
         self.ctx.clear_kv_cache()
         self.ctx.decode(batch)
+        t_dec = time.time() - t_dec_start
         
         # 4. 解析结果
         raw_ts = []
@@ -218,7 +228,24 @@ class QwenForcedAligner:
             
         fixed_ts = self.processor.fix_timestamps(np.array(raw_ts))
         ms = np.array(fixed_ts) * self.STEP_MS
-        items = [ForcedAlignItem(text=w, start_time=ms[i*2]/1000.0, end_time=ms[i*2+1]/1000.0) for i, w in enumerate(words)]
+        items = [
+            ForcedAlignItem(
+                text=w, 
+                start_time=ms[i*2]/1000.0 + offset_sec, 
+                end_time=ms[i*2+1]/1000.0 + offset_sec
+            ) 
+            for i, w in enumerate(words)
+        ]
         
-        if self.verbose: print(f"--- [Aligner] 对齐完成，耗时: {time.time()-t0:.2f}s ---")
-        return ForcedAlignResult(items=items)
+        t_total = time.time() - t_start
+        if self.verbose: 
+            print(f"--- [Aligner] 对齐完成，总耗时: {t_total:.2f}s (Encoder: {t_enc:.2f}s, Decoder: {t_dec:.2f}s) ---")
+        
+        return ForcedAlignResult(
+            items=items,
+            performance={
+                "encoder_time": t_enc,
+                "decoder_time": t_dec,
+                "total_time": t_total
+            }
+        )

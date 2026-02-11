@@ -9,43 +9,46 @@ from pathlib import Path
 from collections import deque
 from typing import Optional, List
 
-from .schema import MsgType, StreamingMessage, DecodeResult
+from .schema import MsgType, StreamingMessage, DecodeResult, ASREngineConfig, TranscribeResult, ForcedAlignItem, ForcedAlignResult
 from .encoder import encoder_worker_proc
 from .utils import normalize_language_name, validate_language
+from .aligner import QwenForcedAligner
 from . import llama
 
 class QwenASREngine:
     """Qwen3-ASR 流式转录引擎 (GGUF 后端)"""
-    def __init__(
-        self,
-        encoder_onnx: str,
-        llm_gguf: str,
-        mel_filters: str,
-        n_ctx: int = 4096,
-        verbose: bool = True,
-        use_dml: bool = True
-    ):
-        self.verbose = verbose
-        if verbose: print(f"--- [QwenASR] 初始化引擎 ---")
+    def __init__(self, config: ASREngineConfig):
+        self.verbose = config.verbose
+        if self.verbose: print(f"--- [QwenASR] 初始化引擎 (DML: {config.use_dml}) ---")
         
-        # 1. 加载 LLM
+        # 路径解析
+        encoder_onnx = os.path.join(config.model_dir, config.encoder_fn)
+        llm_gguf = os.path.join(config.model_dir, config.llm_fn)
+        mel_filters = os.path.join(config.model_dir, config.mel_fn)
+
+        # 1. 加载识别 LLM
         self.model = llama.LlamaModel(llm_gguf)
         self.embedding_table = llama.get_token_embeddings_gguf(llm_gguf)
-        self.ctx = llama.LlamaContext(self.model, n_ctx=n_ctx, n_batch=4096, embeddings=False)
+        self.ctx = llama.LlamaContext(self.model, n_ctx=config.n_ctx, n_batch=4096, embeddings=False)
         
         # 2. 启动音频编码器子进程
         self.to_enc_q = mp.Queue()
         self.from_enc_q = mp.Queue()
         self.enc_proc = mp.Process(
             target=encoder_worker_proc, 
-            args=(self.to_enc_q, self.from_enc_q, encoder_onnx, mel_filters, 40.0, use_dml), 
+            args=(self.to_enc_q, self.from_enc_q, encoder_onnx, mel_filters, 40.0, config.use_dml), 
             daemon=True
         )
         self.enc_proc.start()
         
+        # 3. 按需加载对齐器 (主进程)
+        self.aligner = None
+        if config.enable_aligner:
+            self.aligner = QwenForcedAligner(config.align_config)
+
         # 等待编码器预热及就绪信号
         msg = self.from_enc_q.get()
-        if msg.msg_type == MsgType.MSG_READY and verbose:
+        if msg.msg_type == MsgType.MSG_READY and self.verbose:
             print("--- [QwenASR] 编码器已就绪 ---")
 
         # 缓存 Token ID
@@ -177,7 +180,7 @@ class QwenASREngine:
         memory_chunks: int = 2,
         temperature: float = 0.4,
         rollback_num: int = 5
-    ) -> str:
+    ) -> TranscribeResult:
         """运行完整转录流水线"""
         # 语言归一化与校验
         if language:
@@ -191,12 +194,15 @@ class QwenASREngine:
         
         history_segments = deque(maxlen=memory_chunks)
         total_full_text = ""
+        all_aligned_items: List[ForcedAlignItem] = []
+        last_char_end_time = 0.0
         
         # 统计指标 (与 21 脚本一致)
         stats = {
             "prefill_time": 0.0, "decode_time": 0.0,
             "prefill_tokens": 0, "decode_tokens": 0,
-            "wait_time": 0.0, "encode_time": 0.0
+            "wait_time": 0.0, "encode_time": 0.0,
+            "align_enc_time": 0.0, "align_dec_time": 0.0
         }
         t_main_start = time.time()
 
@@ -236,11 +242,35 @@ class QwenASREngine:
                 temp += 0.3
                 if self.verbose: print(f"\n[ASR] 熔断重启 (Temp={temp:.1f})")
             
-            # 更新文本与统计
+            # 更新文本
             new_text_part = res.text[len(prefix_text):]
             history_segments.append({'embd': current_embd, 'text': new_text_part})
             total_full_text += new_text_part
             
+            # --- 集成对齐逻辑 (渐进式) ---
+            if self.aligner and new_text_part.strip():
+                # 计算音频切片：以上一个字的结束时间为起点
+                start_sample = int(last_char_end_time * sr)
+                end_sample = min((i + 1) * samples_per_chunk, total_len)
+                
+                # 如果当前已经是最后一块，确保包含了全部音频
+                if was_last: end_sample = total_len
+                
+                if end_sample > start_sample:
+                    audio_slice = audio[start_sample:end_sample]
+                    align_res = self.aligner.align(
+                        audio_slice, 
+                        new_text_part, 
+                        language=language, 
+                        offset_sec=last_char_end_time
+                    )
+                    if align_res.items:
+                        all_aligned_items.extend(align_res.items)
+                        last_char_end_time = align_res.items[-1].end_time
+                        if align_res.performance:
+                            stats["align_enc_time"] += align_res.performance.get("encoder_time", 0)
+                            stats["align_dec_time"] += align_res.performance.get("decoder_time", 0)
+
             stats["prefill_tokens"] += res.n_prefill; stats["prefill_time"] += res.t_prefill
             stats["decode_tokens"] += res.n_generate; stats["decode_time"] += res.t_generate
 
@@ -256,8 +286,14 @@ class QwenASREngine:
             print(f"  🔹 RTF (实时率) : {rtf:.3f} (越小越快)")
             print(f"  🔹 音频时长    : {audio_duration:.2f} 秒")
             print(f"  🔹 总处理耗时  : {t_total:.2f} 秒")
-            print(f"  🔹 编码等待    : {stats['wait_time']:.2f} 秒 (等待音频特征提取)")
+            print(f"  🔹 编码等待    : {stats['wait_time']:.2f} 秒")
+            if self.aligner:
+                print(f"  🔹 对齐耗时    : {stats['align_enc_time']+stats['align_dec_time']:.2f} 秒 (Enc: {stats['align_enc_time']:.2f}s, Dec: {stats['align_dec_time']:.2f}s)")
             print(f"  🔹 LLM 预填充  : {stats['prefill_time']/1000:.3f} 秒 ({stats['prefill_tokens']} tokens, {pre_speed:.1f} tokens/s)")
             print(f"  🔹 LLM 生成    : {stats['decode_time']/1000:.3f} 秒 ({stats['decode_tokens']} tokens, {gen_speed:.1f} tokens/s)")
             
-        return total_full_text
+        return TranscribeResult(
+            text=total_full_text,
+            alignment=ForcedAlignResult(items=all_aligned_items) if all_aligned_items else None,
+            performance=stats
+        )

@@ -6,15 +6,11 @@ from pathlib import Path
 # 添加项目路径
 sys.path.append(str(Path(__file__).parent.absolute()))
 
-from qwen_asr_gguf.inference import QwenForcedAligner, load_audio
+from qwen_asr_gguf.inference import QwenForcedAligner, load_audio, AlignerConfig
 
 def main():
     # 路径配置
-    model_dir = Path("./model")
-    encoder_onnx = model_dir / "qwen3_aligner_encoder.int8.onnx"
-    llm_gguf = model_dir / "qwen3_aligner_llm.q8_0.gguf"
-    mel_filters = model_dir / "mel_filters.npy"
-    
+    model_dir = "model"
     audio_path = "test.mp3"
     text_path = "test.txt"
     
@@ -25,13 +21,9 @@ def main():
     with open(text_path, "r", encoding="utf-8") as f:
         text = f.read().strip()
 
-    # 1. 初始化对齐器 (内化复杂逻辑)
-    aligner = QwenForcedAligner(
-        encoder_onnx=str(encoder_onnx),
-        llm_gguf=str(llm_gguf),
-        mel_filters=str(mel_filters),
-        use_dml=False
-    )
+    # 1. 初始化对齐器 (使用标准化 Config)
+    config = AlignerConfig(model_dir=model_dir, use_dml=False)
+    aligner = QwenForcedAligner(config=config)
     
     # 2. 加载音频 (基于 pydub)
     print(f"加载音频: {audio_path}")

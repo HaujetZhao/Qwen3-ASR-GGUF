@@ -38,10 +38,11 @@ class ForcedAlignItem:
     start_time: float        # 单位：秒
     end_time: float          # 单位：秒
 
-@dataclass(frozen=True)
+@dataclass
 class ForcedAlignResult:
     """对齐结果标准化集合 (官方结构化输出格式)"""
     items: List[ForcedAlignItem]
+    performance: Optional[dict] = None
 
     def __iter__(self):
         return iter(self.items)
@@ -51,3 +52,42 @@ class ForcedAlignResult:
 
     def __getitem__(self, idx: int) -> ForcedAlignItem:
         return self.items[idx]
+
+@dataclass
+class AlignerConfig:
+    """对齐引擎配置"""
+    model_dir: str
+    encoder_fn: str = "qwen3_aligner_encoder.int8.onnx"
+    llm_fn: str = "qwen3_aligner_llm.q8_0.gguf"
+    mel_fn: str = "mel_filters.npy"
+    use_dml: bool = False
+    n_ctx: int = 8192
+    verbose: bool = True
+
+@dataclass
+class ASREngineConfig:
+    """ASR 识别引擎配置"""
+    model_dir: str
+    encoder_fn: str = "qwen3_asr_encoder.int8.onnx"
+    llm_fn: str = "qwen3_asr_llm.q8_0.gguf"
+    mel_fn: str = "mel_filters.npy"
+    use_dml: bool = False
+    n_ctx: int = 4096
+    verbose: bool = True
+    enable_aligner: bool = False
+    align_config: Optional[AlignerConfig] = None
+
+    def __post_init__(self):
+        if self.align_config is None:
+            self.align_config = AlignerConfig(
+                model_dir=self.model_dir,
+                use_dml=self.use_dml,
+                verbose=self.verbose
+            )
+
+@dataclass
+class TranscribeResult:
+    """ASR 转录结果 (含可选的对齐信息)"""
+    text: str
+    alignment: Optional[ForcedAlignResult] = None
+    performance: Optional[dict] = None
