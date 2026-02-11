@@ -22,7 +22,7 @@ def setup_logging(level: int = logging.WARNING, log_file: str = os.path.join("lo
         配置好的 logger 实例
     """
     # 获取根 logger
-    root_logger = logging.getLogger('fun_asr_gguf')
+    root_logger = logging.getLogger('qwen_asr_gguf')
     root_logger.setLevel(logging.DEBUG)  # 接收所有级别的日志
     root_logger.handlers.clear()  # 清除已有处理器
 

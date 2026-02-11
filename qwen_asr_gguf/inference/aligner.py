@@ -12,6 +12,7 @@ from .schema import ForcedAlignItem, ForcedAlignResult, AlignerConfig
 from .encoder import QwenAudioEncoder
 from .utils import normalize_language_name, validate_language
 from . import llama
+from . import logger
 
 class AlignerProcessor:
     """文本预处理与时间戳修正逻辑"""
@@ -133,6 +134,13 @@ class AlignerProcessor:
         根据原始文本和干净的对齐项，重组包含标点的时间戳序列。
         原则：低耦合、内核输出标准化。
         """
+        logger.debug(f"[Aligner] --- 开始执行 reconcile ---")
+        logger.debug(f"[Aligner] 原始全文: '{original_text}'")
+        
+        # 预先全量记录原始对齐结果
+        raw_items_str = " | ".join([f"'{it.text}'({it.start_time:.3f}-{it.end_time:.3f})" for it in items])
+        logger.debug(f"[Aligner] 原始对齐项列表 (总计 {len(items)} 个): [{raw_items_str}]")
+        
         if not items:
             return [ForcedAlignItem(text=original_text, start_time=0.0, end_time=0.0)] if original_text else []
 
@@ -140,7 +148,8 @@ class AlignerProcessor:
         curr_ptr = 0
         last_ts = items[0].start_time
 
-        for item in items:
+        for i, item in enumerate(items):
+            logger.debug(f"[Aligner] 处理原始项 idx={i}: '{item.text}' [{item.start_time:.3f}s - {item.end_time:.3f}s]")
             # 搜索当前 item.text 在 original_text 中的位置 (跳过非保留字符)
             start_pos, end_pos = self._find_token_indices(original_text, item.text, curr_ptr)
             
@@ -148,15 +157,18 @@ class AlignerProcessor:
                 # 1. 处理间隙项 (标点/空格)
                 if start_pos > curr_ptr:
                     gap_text = original_text[curr_ptr:start_pos]
+                    logger.debug(f"[Aligner] 间隙项: '{gap_text}' at [{curr_ptr}:{start_pos}]")
                     reconciled.append(ForcedAlignItem(
                         text=gap_text,
                         start_time=last_ts,
-                        end_time=item.start_time
+                        end_time=last_ts # 修改处：对齐到左侧字的结束
                     ))
                 
                 # 2. 对其后的项使用原始文本中的形态
+                matched_text = original_text[start_pos:end_pos]
+                logger.debug(f"[Aligner] 匹配成功 idx={i}: '{item.text}' -> '{matched_text}' at [{start_pos}:{end_pos}]")
                 reconciled.append(ForcedAlignItem(
-                    text=original_text[start_pos:end_pos],
+                    text=matched_text,
                     start_time=item.start_time,
                     end_time=item.end_time
                 ))
@@ -164,6 +176,7 @@ class AlignerProcessor:
                 curr_ptr = end_pos
                 last_ts = item.end_time
             else:
+                logger.warning(f"[Aligner] 降级匹配 idx={i}: 无法在文本中找到 Token '{item.text}'，起始位置={curr_ptr}")
                 # 降级：若无法匹配则保持原样
                 reconciled.append(item)
                 last_ts = item.end_time
@@ -197,10 +210,14 @@ class AlignerProcessor:
                     return first_match, i + 1
             elif self.is_kept_char(ch):
                 if first_match != -1:
+                    # 发生了回退
+                    logger.debug(f"[Aligner] Token 匹配回退: target='{target}' at text[{i}]='{ch}'，回退到 {first_match}")
                     i = first_match 
                     first_match = -1
                     t_ptr = 0
             i += 1
+        
+        logger.debug(f"[Aligner] Token 查找失败: target='{target}', start_from={start_index}, context='{text[start_index:start_index+50]}...'")
         return -1, -1
 
 class QwenForcedAligner:
@@ -294,7 +311,8 @@ class QwenForcedAligner:
             logits_ptr = self.ctx.get_logits_ith(batch.n_tokens - (n_total - idx)) # 对应 batch 中的索引
             logits = np.ctypeslib.as_array(logits_ptr, shape=(152064,))
             raw_ts.append(np.argmax(logits[:4000]))
-            
+        del batch
+        
         fixed_ts = self.processor.fix_timestamps(np.array(raw_ts))
         ms = np.array(fixed_ts) * self.STEP_MS
         items = [

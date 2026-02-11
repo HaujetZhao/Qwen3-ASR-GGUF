@@ -3,6 +3,7 @@ import os
 import time
 import re
 import codecs
+import dataclasses
 import numpy as np
 import multiprocessing as mp
 from pathlib import Path
@@ -13,6 +14,15 @@ from .schema import MsgType, StreamingMessage, DecodeResult, ASREngineConfig, Tr
 from .asr_worker import asr_helper_worker_proc
 from .utils import normalize_language_name, validate_language
 from . import llama
+
+@dataclasses.dataclass
+class ASRS_Segment:
+    """管理分片记忆及其物理时间坐标"""
+    idx: int
+    audio_start: float
+    audio_end: float
+    text: str = ""
+    items: List[ForcedAlignItem] = None   
 
 class QwenASREngine:
     """Qwen3-ASR 流式转录引擎 (GGUF 后端) - 统一辅助进程架构"""
@@ -31,7 +41,7 @@ class QwenASREngine:
         self.embedding_table = llama.get_token_embeddings_gguf(llm_gguf)
         self.ctx = llama.LlamaContext(self.model, n_ctx=config.n_ctx, n_batch=4096, embeddings=False)
         
-        # 2. 启动统一辅助子进程 (编码 + 对齐)
+        # 2. 启动辅助子进程 (编码 + 对齐)
         self.to_worker_q = mp.Queue()
         self.from_enc_q = mp.Queue()
         self.from_align_q = mp.Queue()
@@ -88,7 +98,7 @@ class QwenASREngine:
         
         return total_embd
 
-    def _run_llm_buffered(
+    def _decode(
         self, 
         full_embd: np.ndarray,
         prefix_text: str, 
@@ -96,7 +106,7 @@ class QwenASREngine:
         is_last_chunk: bool = False, 
         temperature: float = 0.4
     ) -> DecodeResult:
-        """内部方法：执行单次 LLM 生成循环（仅负责推理）"""
+        """底层方法：执行单次 LLM 生成循环（物理推理）"""
         result = DecodeResult()
         
         total_len = full_embd.shape[0]
@@ -125,7 +135,7 @@ class QwenASREngine:
         seed = int(np.random.randint(0, 2**31 - 1))
         sampler = self.llama_mod.LlamaSampler(temperature=temperature, seed=seed)
         last_sampled_token = sampler.sample(self.ctx.ptr)
-        for _ in range(150): # Max new tokens per chunk
+        for _ in range(512): # Max new tokens per chunk
             if last_sampled_token in [self.model.eos_token, self.ID_IM_END]:
                 break
             
@@ -153,6 +163,7 @@ class QwenASREngine:
             
         gen_time = time.time() - t_gen_start
         del sampler  # 释放采样器资源
+        del batch
             
         if is_last_chunk and not result.is_aborted:
             while display_queue:
@@ -168,25 +179,104 @@ class QwenASREngine:
                 stable_text_acc += final_p
         
         # 填充结果（内核输出标准化）
-        result.text = prefix_text + stable_text_acc
+        result.text = stable_text_acc
         result.stable_tokens = stable_tokens
         result.t_prefill = prefill_time
         result.t_generate = gen_time
         result.n_prefill = total_len
         result.n_generate = n_gen_tokens
+        result.n_generate = n_gen_tokens
         return result
+
+    def _safe_decode(
+        self, 
+        full_embd: np.ndarray, 
+        prefix_text: str, 
+        rollback_num: int, 
+        is_last_chunk: bool, 
+        temperature: float
+    ) -> DecodeResult:
+        """带熔断加温重试的高层推理封装"""
+        for i in range(4):
+            res = self._decode(full_embd, prefix_text, rollback_num, is_last_chunk, temperature)
+            if not res.is_aborted:
+                break
+            temperature += 0.3
+            res.text += "====解码有误，强制熔断===="
+            print(f"\n\n[!] 触发重试 (Temp -> {temperature:.1f})\n")
+        return res 
+
+    def _collect_alignment(
+        self, 
+        idx: int, 
+        all_segments: List[ASRS_Segment], 
+        all_aligned_items: List[ForcedAlignItem], 
+        stats: dict
+    ):
+        """同步回收指定索引的对齐结果并更新状态"""
+        if idx < 0 or idx >= len(all_segments): return
+        
+        align_msg = self.from_align_q.get()
+        if align_msg.msg_type == MsgType.MSG_ALIGN and align_msg.data:
+            ares: ForcedAlignResult = align_msg.data
+            all_segments[idx].items = ares.items
+            all_aligned_items.extend(ares.items)
+            if ares.performance:
+                stats["align_enc_time"] += ares.performance.get("encoder_time", 0)
+                stats["align_dec_time"] += ares.performance.get("decoder_time", 0)
+
+    def _print_stats(self, stats: dict, audio_duration: float, t_total: float):
+        """打印转录过程的性能统计指标"""
+        rtf = t_total / audio_duration if audio_duration > 0 else 0
+        pre_speed = stats["prefill_tokens"] / stats["prefill_time"] if stats["prefill_time"] > 0 else 0
+        gen_speed = stats["decode_tokens"] / stats["decode_time"] if stats["decode_time"] > 0 else 0
+        
+        print(f"\n\n📊 性能统计:")
+        print(f"  🔹 RTF (实时率) : {rtf:.3f} (越小越快)")
+        print(f"  🔹 音频时长    : {audio_duration:.2f} 秒")
+        print(f"  🔹 总处理耗时  : {t_total:.2f} 秒")
+        print(f"  🔹 编码等待    : {stats['wait_time']:.2f} 秒")
+        print(f"  🔹 对齐总时    : {stats['align_enc_time']+stats['align_dec_time']:.2f} 秒 (分段异步对齐)")
+        print(f"  🔹 LLM 预填充  : {stats['prefill_time']:.3f} 秒 ({stats['prefill_tokens']} tokens, {pre_speed:.1f} tokens/s)")
+        print(f"  🔹 LLM 生成    : {stats['decode_time']:.3f} 秒 ({stats['decode_tokens']} tokens, {gen_speed:.1f} tokens/s)")
 
     def transcribe(
         self, 
+        audio_file: str, 
+        language: Optional[str] = None, 
+        context: Optional[str] = None, 
+        chunk_size: float = 40.0,
+        start_second: float = 0.0,
+        duration: float = 0.0,
+        temperature: float = 0.4,
+        memory_num: int = 1,
+        rollback_num: int = 5
+    ) -> TranscribeResult:
+        """运行完整转录流水线 (从文件加载音频)"""
+        from .utils import load_audio
+        audio = load_audio(audio_file, start_second=start_second, duration=duration)
+        
+        return self.asr(
+            audio=audio,
+            context=context or "",
+            language=language,
+            chunk_size_sec=chunk_size,
+            memory_chunks=memory_num,
+            temperature=temperature,
+            rollback_num=rollback_num
+        )
+
+    def asr(
+        self, 
         audio: np.ndarray,
-        context: str = "",
-        language: str = "Chinese",
+        context: Optional[str],
+        language: Optional[str],
         chunk_size_sec: float = 40.0,
         memory_chunks: int = 2,
         temperature: float = 0.4,
         rollback_num: int = 5
     ) -> TranscribeResult:
-        """运行完整转录流水线 (异步对齐 - 单通道版)"""
+        """运行完整转录流水线 (三级流水线：i+1 预取, i 识别, i-1 对齐)"""
         # 语言归一化与校验
         if language:
             language = normalize_language_name(language)
@@ -196,11 +286,19 @@ class QwenASREngine:
         samples_per_chunk = int(chunk_size_sec * sr)
         total_len = len(audio)
         num_chunks = int(np.ceil(total_len / samples_per_chunk))
+        total_duration = total_len / sr
         
-        history_segments = deque(maxlen=memory_chunks)
+        # 记忆管理 (预定义所有分片的物理边界)
+        all_segments: List[ASRS_Segment] = [
+            ASRS_Segment(
+                idx=i,
+                audio_start=i * chunk_size_sec,
+                audio_end=min((i + 1) * chunk_size_sec, total_duration)
+            ) for i in range(num_chunks)
+        ]
+        asr_memory = deque(maxlen=memory_chunks) # 存储 (embd, text)
         total_full_text = ""
         all_aligned_items: List[ForcedAlignItem] = []
-        align_tasks_count = 0
         
         # 统计指标
         stats = {
@@ -211,98 +309,93 @@ class QwenASREngine:
         }
         t_main_start = time.time()
 
-        def send_enc_chunk(idx):
+        # 发送编码任务
+        def send_enc(idx):
+            if idx >= num_chunks: return
             s, e = idx * samples_per_chunk, min((idx + 1) * samples_per_chunk, total_len)
             data = audio[s:e]
             if len(data) < samples_per_chunk: 
                 data = np.pad(data, (0, samples_per_chunk - len(data)))
             self.to_worker_q.put(StreamingMessage(MsgType.CMD_ENCODE, data=data, is_last=(idx == num_chunks - 1)))
 
-        def send_align_task(idx, text, is_last):
-            nonlocal align_tasks_count
-            if (self.helper_proc and self.helper_proc.is_alive()) and text.strip():
-                s, e = idx * samples_per_chunk, min((idx + 1) * samples_per_chunk, total_len)
-                audio_slice = audio[s:e]
-                
-                self.to_worker_q.put(StreamingMessage(
-                    msg_type=MsgType.CMD_ALIGN,
-                    data=audio_slice,
-                    text=text,
-                    offset_sec=float(idx * chunk_size_sec),
-                    language=language,
-                    is_last=is_last
-                ))
-                align_tasks_count += 1
+        # 发送对齐任务
+        def send_align(idx):
+            if idx < 0 or idx >= len(all_segments): return
+            seg = all_segments[idx]
+            if not seg.text.strip():
+                # 无文本时发送空结果占位，保证消息队列计数正确
+                self.to_worker_q.put(StreamingMessage(MsgType.CMD_ALIGN, data=None, text="", is_last=(idx == num_chunks-1)))
+                return
 
-        if num_chunks > 0: send_enc_chunk(0)
+            # 对齐物理起点：选取“上一片最后一个字的结尾”和“分片物理起跑点前 10s”的较大值
+            offset_sec = seg.audio_start
+            if idx > 0 and all_segments[idx-1].items:
+                last_end = all_segments[idx-1].items[-1].end_time
+                prev_limit = all_segments[idx-1].audio_end 
+                offset_sec = min(prev_limit, max(last_end, prev_limit - 10.0))
+            
+            # 对齐音频截取：从 offset 到本片物理结尾
+            s_smpl, e_smpl = int(offset_sec * sr), int(seg.audio_end * sr)
+            audio_slice = audio[s_smpl:e_smpl]
+            
+            self.to_worker_q.put(StreamingMessage(
+                msg_type=MsgType.CMD_ALIGN,
+                data=audio_slice,
+                text=seg.text,
+                offset_sec=float(offset_sec),
+                language=language,
+                is_last=(idx == num_chunks - 1)
+            ))
+
+        # --- 三级流水线主循环 ---
+        if num_chunks > 0: send_enc(0)
 
         for i in range(num_chunks):
-            # 1. 获取特征
+            # 1. 拿到第 i 片段音频特征
             t_w_start = time.time()
             msg = self.from_enc_q.get()
             stats["wait_time"] += (time.time() - t_w_start)
             stats["encode_time"] += msg.encode_time
+            audio_feature, was_last = msg.data, msg.is_last
             
-            current_embd = msg.data
-            was_last = msg.is_last
+            # 2. 拿到 i-2 片段时间戳 (用以驱动 i-1 的对齐起点)
+            if i >= 2: self._collect_alignment(i - 2, all_segments, all_aligned_items, stats)
             
-            # 提前触发下一块特征提取
-            if not was_last: send_enc_chunk(i + 1)
+            # 3. 触发 i+1 特征提取
+            if not was_last: send_enc(i + 1)
             
-            # 2. 构建记忆并推理
-            prefix_text = "".join([seg['text'] for seg in history_segments])
-            combined_audio_embd = np.concatenate([seg['embd'] for seg in history_segments] + [current_embd], axis=0)
-            full_embd = self._build_prompt_embd(combined_audio_embd, prefix_text, context, language)
+            # 4. 触发 i-1 时间戳匹配
+            if i >= 1: send_align(i - 1)
             
-            temp = temperature
-            for retry in range(6):
-                res = self._run_llm_buffered(full_embd, prefix_text, rollback_num, is_last_chunk=was_last, temperature=temp)
-                if not res.is_aborted: break
-                temp += 0.3
-                if self.verbose: print(f"\n[ASR] 熔断重启 (Temp={temp:.1f})")
+            # 5. 识别第 i 片段文字
+            prefix_text = "".join([m[1] for m in asr_memory])
+            combined_audio = np.concatenate([m[0] for m in asr_memory] + [audio_feature], axis=0)
+            full_embd = self._build_prompt_embd(combined_audio, prefix_text, context, language)
             
-            new_text_part = res.text[len(prefix_text):]
-            history_segments.append({'embd': current_embd, 'text': new_text_part})
-            total_full_text += new_text_part
-            
-            # --- 异步下发对齐任务 ---
-            send_align_task(i, new_text_part, was_last)
+            # 带熔断加温重试的解码调用
+            res = self._safe_decode(full_embd, prefix_text, rollback_num, was_last, temperature)
 
+            
+            # 记忆管理
+            all_segments[i].text = res.text
+            asr_memory.append((audio_feature, res.text))
+            
+            total_full_text += res.text
             stats["prefill_tokens"] += res.n_prefill; stats["prefill_time"] += res.t_prefill
             stats["decode_tokens"] += res.n_generate; stats["decode_time"] += res.t_generate
 
-        # 3. 回收所有对齐结果
-        if align_tasks_count > 0:
-            if self.verbose: print(f"\n--- [QwenASR] 正在回收 {align_tasks_count} 个对齐结果... ---")
-            for _ in range(align_tasks_count):
-                align_msg = self.from_align_q.get()
-                if align_msg.msg_type == MsgType.MSG_ALIGN and align_msg.data:
-                    align_res: ForcedAlignResult = align_msg.data
-                    all_aligned_items.extend(align_res.items)
-                    if align_res.performance:
-                        stats["align_enc_time"] += align_res.performance.get("encoder_time", 0)
-                        stats["align_dec_time"] += align_res.performance.get("decoder_time", 0)
-
-        # 4. 排序结果 (防止子进程回收乱序)
-        all_aligned_items.sort(key=lambda x: x.start_time)
-
-        t_total = time.time() - t_main_start
-        audio_duration = total_len / sr
-
-        if self.verbose:
-            rtf = t_total / audio_duration if audio_duration > 0 else 0
-            pre_speed = stats["prefill_tokens"] / (stats["prefill_time"]) if stats["prefill_time"] > 0 else 0
-            gen_speed = stats["decode_tokens"] / (stats["decode_time"]) if stats["decode_time"] > 0 else 0
+        # --- 收尾逻辑 ---
+        if num_chunks >= 2: 
+            self._collect_alignment(num_chunks - 2, all_segments, all_aligned_items, stats)
             
-            print(f"\n\n📊 性能统计:")
-            print(f"  🔹 RTF (实时率) : {rtf:.3f} (越小越快)")
-            print(f"  🔹 音频时长    : {audio_duration:.2f} 秒")
-            print(f"  🔹 总处理耗时  : {t_total:.2f} 秒")
-            print(f"  🔹 编码等待    : {stats['wait_time']:.2f} 秒")
-            if self.helper_proc:
-                print(f"  🔹 对齐总时    : {stats['align_enc_time']+stats['align_dec_time']:.2f} 秒 (子进程并行 Enc:{stats['align_enc_time']:.2f}s, Dec:{stats['align_dec_time']:.2f}s)")
-            print(f"  🔹 LLM 预填充  : {stats['prefill_time']:.3f} 秒 ({stats['prefill_tokens']} tokens, {pre_speed:.1f} tokens/s)")
-            print(f"  🔹 LLM 生成    : {stats['decode_time']:.3f} 秒 ({stats['decode_tokens']} tokens, {gen_speed:.1f} tokens/s)")
+        if num_chunks >= 1:
+            send_align(num_chunks - 1)
+            self._collect_alignment(num_chunks - 1, all_segments, all_aligned_items, stats)
+
+        # 4. 结果整理
+        all_aligned_items.sort(key=lambda x: x.start_time)
+        t_total = time.time() - t_main_start
+        if self.verbose: self._print_stats(stats, total_duration, t_total)
             
         return TranscribeResult(
             text=total_full_text,

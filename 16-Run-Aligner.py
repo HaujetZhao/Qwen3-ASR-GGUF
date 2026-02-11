@@ -22,7 +22,11 @@ def main():
         text = f.read().strip()
 
     # 1. 初始化对齐器 (使用标准化 Config)
-    config = AlignerConfig(model_dir=model_dir, use_dml=True)
+    config = AlignerConfig(
+        model_dir="model", 
+        use_dml=True, 
+        encoder_fn = "qwen3_aligner_encoder.fp16.onnx" 
+    )
     aligner = QwenForcedAligner(config=config)
     
     # 2. 加载音频 (基于 pydub)
