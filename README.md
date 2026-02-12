@@ -81,7 +81,7 @@ pip install onnxruntime-directml pydub numpy gguf
 转换格式还需要：
 
 ```bash
-pip install torch transformers
+pip install torch transformers==4.57.6
 ```
 
 > `pydub` 需要系统安装 [ffmpeg](https://ffmpeg.org/download.html)
