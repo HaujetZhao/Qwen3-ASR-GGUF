@@ -62,7 +62,11 @@ class ForcedAlignResult:
 class AlignerConfig:
     """对齐引擎配置"""
     model_dir: str
-    encoder_fn: str = "qwen3_aligner_encoder.fp16.onnx"
+    # 拆分为 Frontend 和 Backend
+    encoder_frontend_fn: str = "qwen3_aligner_encoder_frontend.fp16.onnx"
+    encoder_backend_fn: str = "qwen3_aligner_encoder_backend.fp16.onnx"
+    # encoder_fn: str = "qwen3_aligner_encoder.fp16.onnx" (Deprecated)
+    
     llm_fn: str = "qwen3_aligner_llm.q8_0.gguf"
     mel_fn: str = "mel_filters.npy"
     use_dml: bool = False
@@ -72,7 +76,11 @@ class AlignerConfig:
 class ASREngineConfig:
     """ASR 识别引擎配置"""
     model_dir: str
-    encoder_fn: str = "qwen3_asr_encoder.fp16.onnx"
+    # 拆分为 Frontend 和 Backend
+    encoder_frontend_fn: str = "qwen3_asr_encoder_frontend.fp16.onnx"
+    encoder_backend_fn: str = "qwen3_asr_encoder_backend.fp16.onnx"
+    # encoder_fn: str = "qwen3_asr_encoder.fp16.onnx" (Deprecated)
+    
     llm_fn: str = "qwen3_asr_llm.q8_0.gguf"
     mel_fn: str = "mel_filters.npy"
     use_dml: bool = False

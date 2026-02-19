@@ -10,7 +10,7 @@ def calculate_cosine_similarity(a, b):
     return np.dot(a_flat, b_flat) / (np.linalg.norm(a_flat) * np.linalg.norm(b_flat))
 
 def main():
-    onnx_path = os.path.join(EXPORT_DIR, "qwen3_asr_backend.onnx")
+    onnx_path = os.path.join(EXPORT_DIR, "qwen3_asr_encoder_backend.fp32.onnx")
     input_path = "capture_data/encoder_backend_input.npy"
     output_path = "capture_data/encoder_backend_output.npy"
 

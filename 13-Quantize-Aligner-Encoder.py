@@ -14,6 +14,7 @@ def convert_to_fp16(input_path):
         model = onnx.load(input_path)
         # 使用 ORT Transformers 转换以获得更好的 DML 兼容性
         # 屏蔽对精度敏感或涉及形状计算的算子
+        # 对于 Backend Transformer，保留 LayerNorm 和 Softmax 为 FP32 极其重要
         model_fp16 = convert_float_to_float16(
             model,
             keep_io_types=False,
@@ -34,7 +35,7 @@ def convert_to_int8(input_path):
         quantize_dynamic(
             input_path,
             output_path,
-            op_types_to_quantize=["MatMul"], # 权重量化的核心目标
+            op_types_to_quantize=["MatMul", "Attention", "Conv"], # 权重量化的核心目标
             per_channel=True,
             reduce_range=False,
             weight_type=QuantType.QUInt8
@@ -44,27 +45,33 @@ def convert_to_int8(input_path):
         print(f"   ❌ [Failed] INT8 quantization error: {e}")
 
 def main():
-    print("--- 正在开始针对 Qwen3-Aligner Full Encoder 的批量量化/转换 ---")
+    print("--- 正在开始针对 Qwen3-Aligner 的批量量化/转换 ---")
     
-    # 确保 EXPORT_DIR 是 Path 对象
     export_path = Path(EXPORT_DIR)
-    
     if not export_path.exists():
         print(f"错误: 目录 {export_path} 不存在。")
         return
 
-    # 目标模型
-    model_path = str(export_path / "qwen3_aligner_encoder.fp32.onnx")
-
-    if not os.path.exists(model_path):
-        print(f"\n❌ 找不到基准 FP32 模型文件: {model_path}")
-        return
-        
-    # 1. 转换为 FP16 (适用于 GPU/DirectML)
-    convert_to_fp16(model_path)
+    # 定义目标文件列表
+    targets = [
+        "qwen3_aligner_encoder_frontend.fp32.onnx",
+        "qwen3_aligner_encoder_backend.fp32.onnx"
+    ]
     
-    # 2. 动态量化为 INT8 (适用于 CPU)
-    convert_to_int8(model_path)
+    for target in targets:
+        model_path = str(export_path / target)
+        
+        if not os.path.exists(model_path):
+            print(f"\n❌ 跳过: 找不到基准 FP32 模型文件: {target}")
+            continue
+            
+        print(f"\n>>> 处理模型: {target}")
+        
+        # 1. 转换为 FP16 (适用于 GPU/DirectML)
+        convert_to_fp16(model_path)
+        
+        # 2. 动态量化为 INT8 (适用于 CPU)
+        convert_to_int8(model_path)
 
     print("\n--- 所有转换工作已完成 ---")
 

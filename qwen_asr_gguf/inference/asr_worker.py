@@ -40,11 +40,15 @@ def asr_helper_worker_proc(to_worker_q, from_enc_q, from_align_q, config: ASREng
     """ASR 辅助进程：同步处理任务，但分流结果回复 (一进两出架构)"""
     
     # 1. 资源初始化
-    encoder_onnx = os.path.join(config.model_dir, config.encoder_fn)
+    # Split Model Paths
+    frontend_path = os.path.join(config.model_dir, config.encoder_frontend_fn)
+    backend_path = os.path.join(config.model_dir, config.encoder_backend_fn)
     mel_filters = os.path.join(config.model_dir, config.mel_fn)
     
+    # 初始化 Split Encoder
     encoder = QwenAudioEncoder(
-        encoder_path=encoder_onnx,
+        frontend_path=frontend_path,
+        backend_path=backend_path,
         mel_filters_path=mel_filters,
         use_dml=config.use_dml,
         warmup_sec=5.0,
@@ -52,7 +56,8 @@ def asr_helper_worker_proc(to_worker_q, from_enc_q, from_align_q, config: ASREng
     )
     
     aligner = None
-    if config.enable_aligner:
+    if config.enable_aligner and config.align_config:
+        from .aligner import QwenForcedAligner
         aligner = QwenForcedAligner(config.align_config)
 
     from_enc_q.put(StreamingMessage(MsgType.MSG_READY))

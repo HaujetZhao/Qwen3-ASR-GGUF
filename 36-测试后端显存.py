@@ -8,7 +8,7 @@ from export_config import EXPORT_DIR
 # ============================================================================
 # 配置与初始化
 # ============================================================================
-MODEL_PATH = os.path.join(EXPORT_DIR, "qwen3_asr_backend.onnx")
+MODEL_PATH = os.path.join(EXPORT_DIR, "qwen3_asr_encoder_backend.fp32.onnx")
 
 try:
     pynvml.nvmlInit()

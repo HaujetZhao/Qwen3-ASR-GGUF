@@ -17,14 +17,12 @@ def main():
 
     # 配置引擎
     config = ASREngineConfig(
-        model_dir="model", 
-        use_dml = True, 
-        encoder_fn = "qwen3_asr_encoder.fp16.onnx" ,
+        model_dir="model",
+        use_dml = True,
         enable_aligner = True, 
         align_config = AlignerConfig(
             use_dml=True, 
             model_dir="model", 
-            encoder_fn = "qwen3_aligner_encoder.fp16.onnx" 
         )
     )
 

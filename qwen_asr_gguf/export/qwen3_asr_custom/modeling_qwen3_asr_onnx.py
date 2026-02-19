@@ -4,10 +4,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
 
-class Qwen3ASRFrontendFullOnnx(nn.Module):
+class Qwen3ASRFrontendAtomicOnnx(nn.Module):
     """
-    Qwen3-ASR 完整前端 (DirectML 深度优化版)
-    兼容 ASR (896) 和 Aligner (1024) 维度
+    Qwen3-ASR 原子前端 (Atomic Frontend)
+    只处理单个 100 帧的 Chunk (100 * 10ms = 1s)，无状态，极低显存。
+    外部 Python 循环负责调度。
     """
     def __init__(self, audio_tower):
         super().__init__()
@@ -15,51 +16,35 @@ class Qwen3ASRFrontendFullOnnx(nn.Module):
         self.conv2d2 = audio_tower.conv2d2
         self.conv2d3 = audio_tower.conv2d3
         self.conv_out = audio_tower.conv_out
-        # 记录输出维度，避免硬编码
-        self.d_model = audio_tower.conv_out.out_features
+        # 注册位置编码表
         self.register_buffer("pos_embed_table", audio_tower.positional_embedding.positional_embedding)
         
-    def _get_feat_extract_output_lengths(self, input_lengths):
-        input_lengths_leave = input_lengths % 100
-        feat_lengths = (input_lengths_leave - 1) // 2 + 1
-        output_lengths = ((feat_lengths - 1) // 2 + 1 - 1) // 2 + 1 + (input_lengths // 100) * 13
-        return output_lengths
-
-    def forward(self, input_features: torch.Tensor):
-        # 1. 设置长度与填充 (维持 100 帧块对齐)
-        t = input_features.shape[2] 
-        chunk_size = 100
-        expected_len = self._get_feat_extract_output_lengths(t)
-        pad_len = (chunk_size - (t % chunk_size)) % chunk_size
-        x = F.pad(input_features, (0, pad_len))
+    def forward(self, chunk: torch.Tensor):
+        """
+        chunk: (1, 128, 100) - 必须是 float32
+        """
+        # 1. 2D 卷积 (标准处理, Batch=1)
+        x = chunk.unsqueeze(1) # (1, 1, 128, 100)
+        x = F.gelu(self.conv2d1(x))
+        x = F.gelu(self.conv2d2(x))
+        x = F.gelu(self.conv2d3(x))
         
-        # 2. 升维至 3D 模拟分块隔离 (Batch=1, Channel=1, Chunks=N, Freq=128, T_chunk=100)
-        # 使用 unfold 物理隔离块，保证余弦相似度 1.0
-        x = x.unfold(2, chunk_size, chunk_size) # (1, 128, num_chunks, 100)
-        x = x.permute(0, 2, 1, 3).unsqueeze(1)  # (1, 1, num_chunks, 128, 100)
+        # 2. 展平与投影
+        # 输出 T 维度固定为 13 (100 -> 13)
+        x = x.permute(0, 3, 1, 2).contiguous().flatten(2) # (1, 13, D_conv)
+        x = self.conv_out(x) # (1, 13, D_model)
         
-        # 3. 3D 卷积推理 (空间维度步长 2, 深度维度步长 1)
-        # 由于卷积核在深度轴(Chunks)大小为 1，确保了块与块之间完全无数据泄漏
-        x = F.gelu(F.conv3d(x, self.conv2d1.weight.unsqueeze(2), self.conv2d1.bias, stride=(1, 2, 2), padding=(0, 1, 1)))
-        x = F.gelu(F.conv3d(x, self.conv2d2.weight.unsqueeze(2), self.conv2d2.bias, stride=(1, 2, 2), padding=(0, 1, 1)))
-        x = F.gelu(F.conv3d(x, self.conv2d3.weight.unsqueeze(2), self.conv2d3.bias, stride=(1, 2, 2), padding=(0, 1, 1)))
+        # 3. 相对循环位置编码 (Relative Cyclic Positional Embedding)
+        # 根据旧版验证通过的逻辑 ((cumsum - 1) % 13)，位置编码是循环的[0..12]。
+        # 现在的实现完全不依赖 chunk_idx，对任何 chunk 都是加同样的位置编码。
         
-        # 4. 维度变换与输出映射 (Batch=1, Chunks*T_out, Hidden)
-        # 使用 permute + flatten 替代 view 以兼容 DML 动态形状
-        x = x.permute(0, 2, 4, 1, 3).contiguous() # (1, Chunks, 13, C, F)
-        x = x.flatten(1, 2) # (1, Chunks*13, C, F)
-        x = x.flatten(2)    # (1, Chunks*13, D_conv)
-        x = self.conv_out(x)
+        # 使用 arange 生成 0..12
+        local_indices = torch.arange(13, device=x.device, dtype=torch.long)
         
-        # 5. 符号化位置编码 (依据经验文档 4.1 节，使用 cumsum 消除动态维度视图依赖)
-        # 生成 [0..12, 0..12, ...] 循环索引
-        t_out = x.shape[1]
-        indices = (torch.ones(t_out, device=x.device, dtype=torch.long).cumsum(0) - 1) % 13
-        pos_embed = self.pos_embed_table[indices, :].unsqueeze(0)
+        # 使用 embedding 查找
+        pos_embed = F.embedding(local_indices, self.pos_embed_table).unsqueeze(0)
         x = x + pos_embed
         
-        # 6. 对齐官方长度
-        x = x[:, :expected_len, :]
         return x
 
 class Qwen3ASRAudioAttentionOnnx(nn.Module):

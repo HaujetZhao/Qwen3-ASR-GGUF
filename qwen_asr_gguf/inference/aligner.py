@@ -223,14 +223,19 @@ class AlignerProcessor:
 class QwenForcedAligner:
     """Qwen3 强制对齐器 (GGUF 后端)"""
     def __init__(self, config: AlignerConfig):
-        encoder_onnx = os.path.join(config.model_dir, config.encoder_fn)
+        # Split Model Paths
+        fe_path = os.path.join(config.model_dir, config.encoder_frontend_fn)
+        be_path = os.path.join(config.model_dir, config.encoder_backend_fn)
+        
         llm_gguf = os.path.join(config.model_dir, config.llm_fn)
         mel_filters = os.path.join(config.model_dir, config.mel_fn)
         use_dml = config.use_dml
 
         # 1. 初始化统一编码器 (内部包含 5s 分片预热)
+        # 使用 Split 模式
         self.encoder = QwenAudioEncoder(
-            encoder_path=encoder_onnx,
+            frontend_path=fe_path,
+            backend_path=be_path, # 传入 backend
             mel_filters_path=mel_filters,
             use_dml=use_dml,
             warmup_sec=5.0,
