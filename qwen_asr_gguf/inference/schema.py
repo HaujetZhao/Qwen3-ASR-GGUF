@@ -12,6 +12,7 @@ class MsgType(Enum):
     MSG_ALIGN = auto()    # Worker -> 主进程: 返回对齐结果 (Aligner)
     MSG_READY = auto()    # Worker -> 主进程: 就绪信号
     MSG_DONE = auto()     # Worker -> 主进程: 已退出信号
+    MSG_ERROR = auto()    # Worker -> 主进程: 错误信号
 
 @dataclass
 class StreamingMessage:

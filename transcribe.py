@@ -150,7 +150,11 @@ def transcribe(
             init_duration = time.time() - t0
             console.print(f"--- [QwenASR] 引擎初始化耗时: {init_duration:.2f} 秒 ---")
         except Exception as e:
-            console.print(f"[bold red]引擎初始化失败: {e}[/bold red]")
+            console.print(f"[bold red]引擎初始化失败:[/bold red]\n{e}")
+            console.print(f"[bold yellow]建议解决方案：[/bold yellow]")
+            console.print(f"  1. 尝试关闭 DirectML 加速: 使用 [cyan]--no-dml[/cyan]")
+            console.print(f"  2. 尝试关闭 Vulkan 加速: 使用 [cyan]--no-vulkan[/cyan]")
+            console.print(f"  3. 如果问题仍然存在，请在 GitHub 提交 Issue 并附带 [cyan]{PROJ_DIR}\\logs\\latest.log[/cyan] 日志文件。")
             raise typer.Exit(code=1)
 
     # 6. 循环处理文件

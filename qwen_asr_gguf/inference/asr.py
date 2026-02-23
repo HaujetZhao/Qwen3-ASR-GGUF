@@ -57,6 +57,9 @@ class QwenASREngine:
         
         # 3. 等待子进程就绪信号 (包含 Encoder 预热完成)
         msg = self.from_enc_q.get()
+        if msg.msg_type == MsgType.MSG_ERROR:
+            raise RuntimeError(f"辅助进程启动失败: \n\n{msg.data}")
+            
         if msg.msg_type == MsgType.MSG_READY and self.verbose:
             print("--- [QwenASR] 辅助进程已就绪 ---")
 

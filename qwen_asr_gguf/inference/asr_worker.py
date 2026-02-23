@@ -1,5 +1,6 @@
 # coding=utf-8
 import os
+from .. import logger
 from .schema import MsgType, StreamingMessage, ASREngineConfig
 from .encoder import QwenAudioEncoder
 from .aligner import QwenForcedAligner
@@ -40,24 +41,30 @@ def asr_helper_worker_proc(to_worker_q, from_enc_q, from_align_q, config: ASREng
     """ASR 辅助进程：同步处理任务，但分流结果回复 (一进两出架构)"""
     
     # 1. 资源初始化
-    # Split Model Paths
-    frontend_path = os.path.join(config.model_dir, config.encoder_frontend_fn)
-    backend_path = os.path.join(config.model_dir, config.encoder_backend_fn)
-    # 初始化 Split Encoder
-    encoder = QwenAudioEncoder(
-        frontend_path=frontend_path,
-        backend_path=backend_path,
-        use_dml=config.use_dml,
-        warmup_sec=config.chunk_size,
-        verbose=False
-    )
-    
-    aligner = None
-    if config.enable_aligner and config.align_config:
-        from .aligner import QwenForcedAligner
-        aligner = QwenForcedAligner(config.align_config)
-
-    from_enc_q.put(StreamingMessage(MsgType.MSG_READY))
+    try:
+        # Split Model Paths
+        frontend_path = os.path.join(config.model_dir, config.encoder_frontend_fn)
+        backend_path = os.path.join(config.model_dir, config.encoder_backend_fn)
+        
+        # 初始化 Split Encoder
+        encoder = QwenAudioEncoder(
+            frontend_path=frontend_path,
+            backend_path=backend_path,
+            use_dml=config.use_dml,
+            warmup_sec=config.chunk_size,
+            verbose=False
+        )
+        
+        aligner = None
+        if config.enable_aligner and config.align_config:
+            from .aligner import QwenForcedAligner
+            aligner = QwenForcedAligner(config.align_config)
+            
+        from_enc_q.put(StreamingMessage(MsgType.MSG_READY))
+    except Exception as e:
+        logger.error(f"[ASRWorker] 模型加载出错：\n{e}")
+        from_enc_q.put(StreamingMessage(MsgType.MSG_ERROR, data=e))
+        return
 
     # 2. 统一任务循环
     while True:
