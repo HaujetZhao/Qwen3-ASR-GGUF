@@ -43,13 +43,10 @@ def asr_helper_worker_proc(to_worker_q, from_enc_q, from_align_q, config: ASREng
     # Split Model Paths
     frontend_path = os.path.join(config.model_dir, config.encoder_frontend_fn)
     backend_path = os.path.join(config.model_dir, config.encoder_backend_fn)
-    mel_filters = os.path.join(config.model_dir, config.mel_fn)
-    
     # 初始化 Split Encoder
     encoder = QwenAudioEncoder(
         frontend_path=frontend_path,
         backend_path=backend_path,
-        mel_filters_path=mel_filters,
         use_dml=config.use_dml,
         warmup_sec=config.chunk_size,
         verbose=False

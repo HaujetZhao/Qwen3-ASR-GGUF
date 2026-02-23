@@ -173,7 +173,6 @@ EXPORT_DIR = r'./model'
 
 ```bash
 # === 1. ASR 模型导出流程 ===
-python 00-Export-Mel-Filters.py            # 导出 Mel 滤波器权重
 python 01-Export-ASR-Encoder-Frontend.py     # 导出 Encoder 前段 (CNN)
 python 02-Export_ASR-Encoder-Backend.py      # 导出 Encoder 后段 (Transformer)
 python 03-Optimize-ASR-Encoder.py            # 优化 ONNX 模型
@@ -272,7 +271,6 @@ graph TD
 ## 项目结构
 
 ```bash
-├── 00-Export-Mel-Filters.py                # 导出音频预处理 Mel 滤波器权重
 ├── 01-Export-ASR-Encoder-Frontend.py        # 导出 ASR 编码器前段 (CNN)
 ├── 02-Export_ASR-Encoder-Backend.py         # 导出 ASR 编码器后段 (Transformer)
 ├── 03-Optimize-ASR-Encoder.py               # 优化 ASR 编码器 (融合常量、折叠算子)

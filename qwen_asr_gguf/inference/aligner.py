@@ -234,7 +234,6 @@ class QwenForcedAligner:
         be_path = os.path.join(config.model_dir, config.encoder_backend_fn)
         
         llm_gguf = os.path.join(config.model_dir, config.llm_fn)
-        mel_filters = os.path.join(config.model_dir, config.mel_fn)
         use_dml = config.use_dml
 
         # 1. 初始化统一编码器 (内部包含 5s 分片预热)
@@ -242,7 +241,6 @@ class QwenForcedAligner:
         self.encoder = QwenAudioEncoder(
             frontend_path=fe_path,
             backend_path=be_path, # 传入 backend
-            mel_filters_path=mel_filters,
             use_dml=use_dml,
             warmup_sec=5.0,
             verbose=False

@@ -67,7 +67,6 @@ class AlignerConfig:
     encoder_backend_fn: str = "qwen3_aligner_encoder_backend.int4.onnx"
     
     llm_fn: str = "qwen3_aligner_llm.q4_k.gguf" 
-    mel_fn: str = "mel_filters.npy"
     use_dml: bool = False
     n_ctx: int = 2048       # 对于 Aligner Decoder，每秒音频+文字，约占 30 个 token
 
@@ -80,7 +79,6 @@ class ASREngineConfig:
     encoder_backend_fn: str = "qwen3_asr_encoder_backend.int4.onnx"
     
     llm_fn: str = "qwen3_asr_llm.q4_k.gguf"
-    mel_fn: str = "mel_filters.npy"
     use_dml: bool = False
     n_ctx: int = 2048           # 对于 ASR Decoder，每秒音频+文字，约占 20 个 token
     chunk_size: float = 40.0    # 每个片段 40s，对应 800 个 token

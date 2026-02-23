@@ -7,12 +7,71 @@ import scipy.signal
 
 class FastWhisperMel:
     """基于 NumPy 和 SciPy 的纯净版 Mel 提取器 (彻底干掉 librosa 的 numba JIT 启动延时)"""
-    def __init__(self, filter_path: str):
-        self.filters = np.load(filter_path) # (201, 128)
-        self.n_fft = 400
+    def __init__(self, filter_path: str = None, n_mels=128, sr=16000, n_fft=400, f_min=0, f_max=8000, norm="slaney", mel_scale="slaney"):
+        self.n_fft = n_fft
         self.hop_length = 160
-        # 提前计算并缓存好汉明窗
+        self.n_mels = n_mels
+        
+        if filter_path and os.path.exists(filter_path):
+            self.filters = np.load(filter_path)
+        else:
+            self.filters = self._generate_filters(sr, n_fft, n_mels, f_min, f_max, norm, mel_scale)
+            
+        # 提前计算并缓存好汉明窗 (Qwen3/Whisper/Librosa 使用 Hann 窗)
         self.window = scipy.signal.get_window('hann', self.n_fft, fftbins=True)
+        
+    def _generate_filters(self, sr, n_fft, n_mels, f_min, f_max, norm, mel_scale):
+        """
+        生成组件化的梅尔滤波器组 (兼容 torchaudio 行为)
+        norm: "slaney" (面积归一化) 或 None
+        mel_scale: "slaney" (分段线性+对数) 或 "htk" (纯对数)
+        """
+        def hz_to_mel(freq, scale):
+            if scale == "htk":
+                return 2595.0 * np.log10(1.0 + (freq / 700.0))
+            # Slaney Scale (Linear + Log)
+            f_min_sl, f_sp_sl = 0.0, 200.0 / 3
+            mels = (freq - f_min_sl) / f_sp_sl
+            min_log_hz, logstep = 1000.0, np.log(6.4) / 27.0
+            min_log_mel = (min_log_hz - f_min_sl) / f_sp_sl
+            if isinstance(freq, np.ndarray):
+                mask = freq >= min_log_hz
+                mels[mask] = min_log_mel + np.log(freq[mask] / min_log_hz) / logstep
+            elif freq >= min_log_hz:
+                mels = min_log_mel + np.log(freq / min_log_hz) / logstep
+            return mels
+
+        def mel_to_hz(mels, scale):
+            if scale == "htk":
+                return 700.0 * (10.0 ** (mels / 2595.0) - 1.0)
+            # Slaney Scale (Linear + Log)
+            f_min_sl, f_sp_sl = 0.0, 200.0 / 3
+            freqs = f_min_sl + f_sp_sl * mels
+            min_log_hz, logstep = 1000.0, np.log(6.4) / 27.0
+            min_log_mel = (min_log_hz - f_min_sl) / f_sp_sl
+            if isinstance(mels, np.ndarray):
+                mask = mels >= min_log_mel
+                freqs[mask] = min_log_hz * np.exp(logstep * (mels[mask] - min_log_mel))
+            elif mels >= min_log_mel:
+                freqs = min_log_hz * np.exp(logstep * (mels - min_log_mel))
+            return freqs
+
+        n_freqs = n_fft // 2 + 1
+        all_freqs = np.linspace(0, sr // 2, n_freqs)
+        m_pts = np.linspace(hz_to_mel(f_min, mel_scale), hz_to_mel(f_max, mel_scale), n_mels + 2)
+        f_pts = mel_to_hz(m_pts, mel_scale)
+        f_diff = f_pts[1:] - f_pts[:-1]
+        slopes = f_pts[np.newaxis, :] - all_freqs[:, np.newaxis]
+        down_slopes = (-1.0 * slopes[:, :-2]) / f_diff[:-1]
+        up_slopes = slopes[:, 2:] / f_diff[1:]
+        fb = np.maximum(0, np.minimum(down_slopes, up_slopes))
+        
+        # Area Normalization
+        if norm == "slaney":
+            enorm = 2.0 / (f_pts[2 : n_mels + 2] - f_pts[:n_mels])
+            fb *= enorm[np.newaxis, :]
+            
+        return fb.astype(np.float32)
         
     def __call__(self, audio: np.ndarray, dtype=np.float32) -> np.ndarray:
         # 1. Padding (与 librosa 的 center=True 行为保持一致)
@@ -59,7 +118,7 @@ def get_feat_extract_output_lengths(input_lengths):
 
 class QwenAudioEncoder:
     """Qwen3 音频编码器 (Split Frontend + Backend)"""
-    def __init__(self, frontend_path: str, backend_path: str, mel_filters_path: str, use_dml: bool = True, warmup_sec: float = 5.0, verbose: bool = True):
+    def __init__(self, frontend_path: str, backend_path: str, use_dml: bool = True, warmup_sec: float = 5.0, verbose: bool = True):
         self.verbose = verbose
         
         # 初始化 ONNX Session Options
@@ -82,7 +141,7 @@ class QwenAudioEncoder:
         self.sess_fe = ort.InferenceSession(frontend_path, sess_options=sess_opts, providers=providers)
         self.sess_be = ort.InferenceSession(backend_path, sess_options=sess_opts, providers=providers)
         
-        self.mel_extractor = FastWhisperMel(mel_filters_path)
+        self.mel_extractor = FastWhisperMel()
         
         # 检测精度 (以前端为准)
         try:
