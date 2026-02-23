@@ -34,6 +34,37 @@ def get_model_filenames(precision: str, is_aligner: bool = False):
         "backend": f"{prefix}_encoder_backend.{precision}.onnx"
     }
 
+def check_model_files(config: ASREngineConfig):
+    """检查模型文件完整性"""
+    missing_files = []
+    
+    # ASR 核心文件
+    asr_llm = Path(config.model_dir) / config.llm_fn
+    asr_frontend = Path(config.model_dir) / config.encoder_frontend_fn
+    asr_backend = Path(config.model_dir) / config.encoder_backend_fn
+    
+    for f in [asr_llm, asr_frontend, asr_backend]:
+        if not f.exists():
+            missing_files.append(str(f))
+            
+    # Aligner 文件
+    if config.enable_aligner and config.align_config:
+        align_llm = Path(config.align_config.model_dir) / config.align_config.llm_fn
+        align_frontend = Path(config.align_config.model_dir) / config.align_config.encoder_frontend_fn
+        align_backend = Path(config.align_config.model_dir) / config.align_config.encoder_backend_fn
+        
+        for f in [align_llm, align_frontend, align_backend]:
+            if not f.exists():
+                missing_files.append(str(f))
+    
+    if missing_files:
+        console.print("\n[bold red]错误：找不到以下所需模型文件：[/bold red]")
+        for f in missing_files:
+            console.print(f"  - {f}")
+        console.print("\n[bold yellow]请到以下链接下载模型文件，并解压到 model 目录：[/bold yellow]")
+        console.print("[blue]https://github.com/HaujetZhao/Qwen3-ASR-GGUF/releases/tag/models[/blue]\n")
+        raise typer.Exit(code=1)
+
 @app.command()
 def transcribe(
     files: List[Path] = typer.Argument(..., help="要转录的音频文件列表"),
@@ -108,7 +139,10 @@ def transcribe(
     
     console.print(Panel(config_table, title="[bold cyan]Qwen3-ASR 配置选项[/bold cyan]", expand=False))
 
-    # 4. 初始化引擎
+    # 4. 检查模型文件是否存在
+    check_model_files(config)
+
+    # 5. 初始化引擎
     with console.status("[bold yellow]正在初始化引擎，请稍候...[/bold yellow]") as status:
         try:
             t0 = time.time()
@@ -119,7 +153,7 @@ def transcribe(
             console.print(f"[bold red]引擎初始化失败: {e}[/bold red]")
             raise typer.Exit(code=1)
 
-    # 5. 循环处理文件
+    # 6. 循环处理文件
     try:
         for audio_path in files:
             if not audio_path.exists():
@@ -145,7 +179,7 @@ def transcribe(
                 temperature=temperature,
             )
 
-            # 6. 导出结果
+            # 7. 导出结果
             exporters.export_to_txt(txt_out, res)
 
             if timestamp and res.alignment:
