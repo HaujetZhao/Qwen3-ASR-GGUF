@@ -51,14 +51,16 @@ def asr_helper_worker_proc(to_worker_q, from_enc_q, from_align_q, config: ASREng
             frontend_path=frontend_path,
             backend_path=backend_path,
             use_dml=config.use_dml,
-            warmup_sec=config.chunk_size,
+            pad_to=config.pad_to,
             verbose=False
         )
         
         aligner = None
         if config.enable_aligner and config.align_config:
             from .aligner import QwenForcedAligner
-            aligner = QwenForcedAligner(config.align_config)
+            aligner = QwenForcedAligner(
+                config.align_config
+            )
             
         from_enc_q.put(StreamingMessage(MsgType.MSG_READY))
     except Exception as e:

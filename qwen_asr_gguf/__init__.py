@@ -55,5 +55,8 @@ def setup_logging(level: int = logging.WARNING, log_file: str = default_log_file
 
 
 # 初始化默认日志配置（默认 INFO 级别）
-logger = setup_logging(level=logging.INFO)
+try:
+    from .. import logger
+except:
+    logger = setup_logging(level=logging.INFO)
 
