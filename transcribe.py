@@ -73,7 +73,8 @@ def transcribe(
     model_dir: str = typer.Option(str(PROJ_DIR / "model"), "--model-dir", "-m", help="模型权重根目录", rich_help_panel="模型配置"),
     precision: str = typer.Option("int4", "--prec", help="编码器精度: fp32, fp16, int8, int4", rich_help_panel="模型配置"),
     timestamp: bool = typer.Option(True, "--timestamp/--no-ts", help="是否开启时间戳引擎", rich_help_panel="模型配置"),
-    use_dml: bool = typer.Option(True, "--dml/--no-dml", help="是否使用 DirectML 加速", rich_help_panel="模型配置"),
+    onnx_provider: str = typer.Option("DML", "--provider", "-p", help="ONNX 执行后端: CPU, CUDA, DML, TRT", rich_help_panel="模型配置"),
+    llm_use_gpu: bool = typer.Option(True, "--gpu/--no-gpu", help="LLM 是否使用 GPU 加速", rich_help_panel="模型配置"),
     use_vulkan: bool = typer.Option(True, "--vulkan/--no-vulkan", help="是否开启 Vulkan 加速 (设置 GGML_VULKAN=1)", rich_help_panel="模型配置"),
     n_ctx: int = typer.Option(2048, "--n-ctx", help="LLM 上下文窗口大小", rich_help_panel="模型配置"),
     
@@ -110,7 +111,8 @@ def transcribe(
     if timestamp:
         align_config = AlignerConfig(
             model_dir=model_dir,
-            use_dml=use_dml,
+            onnx_provider=onnx_provider,
+            llm_use_gpu=llm_use_gpu,
             encoder_frontend_fn=align_files["frontend"],
             encoder_backend_fn=align_files["backend"],
             n_ctx=n_ctx
@@ -118,7 +120,8 @@ def transcribe(
 
     config = ASREngineConfig(
         model_dir=model_dir,
-        use_dml=use_dml,
+        onnx_provider=onnx_provider,
+        llm_use_gpu=llm_use_gpu,
         encoder_frontend_fn=asr_files["frontend"],
         encoder_backend_fn=asr_files["backend"],
         n_ctx=n_ctx,
@@ -133,7 +136,7 @@ def transcribe(
     config_table = Table(show_header=False, box=None)
     config_table.add_row("模型目录", f"[green]{model_dir}[/green]")
     config_table.add_row("编码精度", f"[cyan]{precision}[/cyan]")
-    config_table.add_row("加速设备", f"DML:{'[green]ON[/green]' if use_dml else '[red]OFF[/red]'} | Vulkan:{'[green]ON[/green]' if use_vulkan else '[red]OFF[/red]'}")
+    config_table.add_row("加速设备", f"ONNX:{onnx_provider} | LLM-GPU:{'[green]ON[/green]' if llm_use_gpu else '[red]OFF[/red]'} | Vulkan:{'[green]ON[/green]' if use_vulkan else '[red]OFF[/red]'}")
     config_table.add_row("时间戳对齐", f"{'[green]启用[/green]' if timestamp else '[red]禁用[/red]'}")
     config_table.add_row("语言设定", f"{language or '自动识别'}")
     
@@ -152,7 +155,7 @@ def transcribe(
         except Exception as e:
             console.print(f"[bold red]引擎初始化失败:[/bold red]\n{e}")
             console.print(f"[bold yellow]建议解决方案：[/bold yellow]")
-            console.print(f"  1. 尝试关闭 DirectML 加速: 使用 [cyan]--no-dml[/cyan]")
+            console.print(f"  1. 尝试使用 CPU 后端: 使用 [cyan]--provider CPU --no-gpu[/cyan]")
             console.print(f"  2. 尝试关闭 Vulkan 加速: 使用 [cyan]--no-vulkan[/cyan]")
             console.print(f"  3. 如果问题仍然存在，请在 GitHub 提交 Issue 并附带 [cyan]{PROJ_DIR}\\logs\\latest.log[/cyan] 日志文件。")
             raise typer.Exit(code=1)

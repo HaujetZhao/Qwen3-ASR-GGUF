@@ -19,10 +19,12 @@ def main():
     # 配置引擎
     config = ASREngineConfig(
         model_dir="model",
-        use_dml = True,
+        onnx_provider = 'DML',
+        llm_use_gpu = True,
         enable_aligner = True, 
         align_config = AlignerConfig(
-            use_dml=True, 
+            onnx_provider='DML', 
+            llm_use_gpu=True,
             model_dir="model", 
         )
     )

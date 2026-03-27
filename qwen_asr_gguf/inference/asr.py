@@ -29,10 +29,7 @@ class QwenASREngine:
     def __init__(self, config: ASREngineConfig):
         self.config = config
         self.verbose = config.verbose
-        if self.verbose: print(f"--- [QwenASR] 初始化引擎 (DML: {config.use_dml}) ---")
-
-        from qwen_asr_gguf.inference import llama
-        self.llama_mod = llama # keep reference
+        if self.verbose: print(f"--- [QwenASR] 初始化引擎 (Provider: {config.onnx_provider}) ---")
         
         # 路径解析
         llm_gguf = os.path.join(config.model_dir, config.llm_fn)
@@ -43,8 +40,8 @@ class QwenASREngine:
         self.encoder = QwenAudioEncoder(
             frontend_path=frontend_path,
             backend_path=backend_path,
-            use_dml=config.use_dml,
-            pad_to=config.pad_to,
+            onnx_provider=config.onnx_provider,
+            dml_pad_to=config.dml_pad_to,
             verbose=self.verbose
         )
 
@@ -55,7 +52,7 @@ class QwenASREngine:
             self.aligner = QwenForcedAligner(config.align_config)
         
         # 3. 加载识别 LLM
-        self.model = llama.LlamaModel(llm_gguf)
+        self.model = llama.LlamaModel(llm_gguf, use_gpu=config.llm_use_gpu)
         self.embedding_table = llama.get_token_embeddings_gguf(llm_gguf)
         self.ctx = llama.LlamaContext(self.model, n_ctx=config.n_ctx, n_batch=4096, embeddings=False)
 
@@ -101,7 +98,8 @@ class QwenASREngine:
         prefix_text: str, 
         rollback_num: int,
         is_last_chunk: bool = False, 
-        temperature: float = 0.4
+        temperature: float = 0.4, 
+        streaming: bool = True, 
     ) -> DecodeResult:
         """底层方法：执行单次 LLM 生成循环（物理推理）"""
         result = DecodeResult()
@@ -109,7 +107,7 @@ class QwenASREngine:
         total_len = full_embd.shape[0]
         pos_base = np.arange(0, total_len, dtype=np.int32)
         pos_arr = np.concatenate([pos_base, pos_base, pos_base, np.zeros(total_len, dtype=np.int32)])
-        batch = self.llama_mod.LlamaBatch(max(total_len * 4, 8192), self.model.n_embd, 1)
+        batch = llama.LlamaBatch(max(total_len * 4, 8192), self.model.n_embd, 1)
         batch.set_embd(full_embd, pos=pos_arr)
         
         # 1. Prefill
@@ -128,7 +126,7 @@ class QwenASREngine:
         
         # 每次解码使用新的随机种子
         seed = int(np.random.randint(0, 2**31 - 1))
-        sampler = self.llama_mod.LlamaSampler(temperature=temperature, seed=seed)
+        sampler = llama.LlamaSampler(temperature=temperature, seed=seed)
         last_sampled_token = sampler.sample(self.ctx.ptr)
         for _ in range(512): # Max new tokens per chunk
             if last_sampled_token in [self.model.eos_token, self.ID_IM_END]:
@@ -143,7 +141,7 @@ class QwenASREngine:
                 stable_tokens.append(ready_token)
                 piece = text_decoder.decode(self.model.token_to_bytes(ready_token))
                 if piece:
-                    print(re.sub('([，。？！：,\.])', '\\1\n', piece), end='', flush=True)
+                    if streaming: print(re.sub(r'([，。？！：,\.])', r'\1\n', piece), end='', flush=True)
                     stable_text_acc += piece
             
             # 熔断检查：检测重复循环
@@ -165,11 +163,11 @@ class QwenASREngine:
                 stable_tokens.append(t)
                 piece = text_decoder.decode(self.model.token_to_bytes(t))
                 if piece:
-                    print(re.sub('([，。？！：,\.])', '\\1\n', piece), end="", flush=True)
+                    if streaming: print(re.sub(r'([，。？！：,\.])', r'\1\n', piece), end="", flush=True)
                     stable_text_acc += piece
             final_p = text_decoder.decode(b"", final=True)
             if final_p: 
-                print(final_p, end='', flush=True)
+                if streaming: print(final_p, end='', flush=True)
                 stable_text_acc += final_p
         
         # 填充结果（内核输出标准化）
@@ -188,11 +186,12 @@ class QwenASREngine:
         prefix_text: str, 
         rollback_num: int, 
         is_last_chunk: bool, 
-        temperature: float
+        temperature: float, 
+        streaming: bool = True, 
     ) -> DecodeResult:
         """带熔断加温重试的高层推理封装"""
         for i in range(4):
-            res = self._decode(full_embd, prefix_text, rollback_num, is_last_chunk, temperature)
+            res = self._decode(full_embd, prefix_text, rollback_num, is_last_chunk, temperature, streaming=streaming)
             if not res.is_aborted:
                 break
             temperature += 0.3

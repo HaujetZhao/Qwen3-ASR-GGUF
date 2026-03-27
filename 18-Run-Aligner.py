@@ -25,7 +25,8 @@ def main():
     # 默认会自动加载 Split Encoder (frontend/backend)
     config = AlignerConfig(
         model_dir="model", 
-        use_dml=True
+        onnx_provider='DML',
+        llm_use_gpu=True
     )
     aligner = QwenForcedAligner(config=config)
     
