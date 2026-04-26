@@ -205,15 +205,15 @@ class QwenASREngine:
         pre_speed = stats["prefill_tokens"] / stats["prefill_time"] if stats["prefill_time"] > 0 else 0
         gen_speed = stats["decode_tokens"] / stats["decode_time"] if stats["decode_time"] > 0 else 0
         
-        print(f"\n\n📊 性能统计:")
-        print(f"  🔹 RTF (实时率) : {rtf:.3f} (越小越快)")
-        print(f"  🔹 音频时长    : {audio_duration:.2f} 秒")
-        print(f"  🔹 总处理耗时  : {t_total:.2f} 秒")
+        print(f"\n\n 性能统计:")
+        print(f"  RTF (实时率) : {rtf:.3f} (越小越快)")
+        print(f"  音频时长    : {audio_duration:.2f} 秒")
+        print(f"  总处理耗时  : {t_total:.2f} 秒")
         if stats.get("align_time"):
-            print(f"  🔹 对齐耗时    : {stats['align_time']:.3f} 秒")
-        print(f"  🔹 编码耗时    : {stats['encode_time']:.3f} 秒")
-        print(f"  🔹 LLM 预填充  : {stats['prefill_time']:.3f} 秒 ({stats['prefill_tokens']} tokens, {pre_speed:.1f} tokens/s)")
-        print(f"  🔹 LLM 生成    : {stats['decode_time']:.3f} 秒 ({stats['decode_tokens']} tokens, {gen_speed:.1f} tokens/s)")
+            print(f"  对齐耗时    : {stats['align_time']:.3f} 秒")
+        print(f"  编码耗时    : {stats['encode_time']:.3f} 秒")
+        print(f"  LLM 预填充  : {stats['prefill_time']:.3f} 秒 ({stats['prefill_tokens']} tokens, {pre_speed:.1f} tokens/s)")
+        print(f"  LLM 生成    : {stats['decode_time']:.3f} 秒 ({stats['decode_tokens']} tokens, {gen_speed:.1f} tokens/s)")
 
     def transcribe(
         self, 
