@@ -92,7 +92,7 @@ def export_to_srt(path: str, result: TranscribeResult):
     content = alignment_to_srt(result.alignment.items)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"✅ 已生成字幕文件: {path}")
+    print(f" 已生成字幕文件: {path}")
 
 def export_to_json(path: str, result: TranscribeResult):
     """将对齐结果保存为 JSON 文件"""
@@ -103,7 +103,7 @@ def export_to_json(path: str, result: TranscribeResult):
     data = alignment_to_json(result.alignment.items)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    print(f"✅ 已导出时间戳: {path}")
+    print(f" 已导出时间戳: {path}")
 
 def export_to_txt(path: str, result: TranscribeResult):
     """将转录结果处理后保存为 TXT 文件 (含 ITN 和标点换行)"""
@@ -116,4 +116,4 @@ def export_to_txt(path: str, result: TranscribeResult):
     
     with open(path, "w", encoding="utf-8") as f:
         f.write(formatted_text)
-    print(f"✅ 已保存文本文件: {path}")
+    print(f" 已保存文本文件: {path}")
