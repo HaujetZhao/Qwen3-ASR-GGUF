@@ -64,8 +64,8 @@ class AlignerConfig:
     """对齐引擎配置"""
     model_dir: str
     # 拆分为 Frontend 和 Backend
-    encoder_frontend_fn: str = "qwen3_aligner_encoder_frontend.fp16.onnx"
-    encoder_backend_fn: str = "qwen3_aligner_encoder_backend.fp16.onnx"
+    encoder_frontend_fn: str = "qwen3_aligner_encoder_frontend.int4.onnx"
+    encoder_backend_fn: str = "qwen3_aligner_encoder_backend.int4.onnx"
     
     llm_fn: str = "qwen3_aligner_llm.q5_k.gguf" 
     onnx_provider: str = 'CPU'  # CPU, CUDA, DML, TensorRT
