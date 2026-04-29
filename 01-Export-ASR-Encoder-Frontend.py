@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).parent / "qwen_asr_gguf" / "export"))
 
 from export_config import ASR_MODEL_DIR, EXPORT_DIR
 from qwen_asr import Qwen3ASRModel
-from qwen3_asr_custom.modeling_qwen3_asr_onnx import Qwen3ASRFrontendAtomicOnnx
+from qwen_asr_gguf.export.qwen3_asr_custom.modeling_qwen3_asr_onnx import Qwen3ASRFrontendAtomicOnnx
 
 def export_frontend():
     model_path = str(ASR_MODEL_DIR)

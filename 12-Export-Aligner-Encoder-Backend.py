@@ -9,7 +9,7 @@ sys.path.append(str(Path(__file__).parent / "qwen_asr_gguf" / "export"))
 
 from export_config import ALIGNER_MODEL_DIR, EXPORT_DIR
 from qwen_asr import Qwen3ASRModel
-from qwen3_asr_custom.modeling_qwen3_asr_onnx import Qwen3ASRBackendOnnx
+from qwen_asr_gguf.export.qwen3_asr_custom.modeling_qwen3_asr_onnx import Qwen3ASRBackendOnnx
 
 def export_aligner_backend():
     model_path = str(ALIGNER_MODEL_DIR) # 使用 ALIGNER 路径
