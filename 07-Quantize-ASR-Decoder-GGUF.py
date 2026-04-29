@@ -6,7 +6,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.absolute()
 QUANTIZE_EXE = PROJECT_ROOT / "qwen_asr_gguf" / "inference" / "bin" / "llama-quantize.exe"
 
-QUANTIZE_TYPE = "q4_k"
+QUANTIZE_TYPE = "q5_k"
 MODEL_DIR = PROJECT_ROOT / "model"
 INPUT_MODEL = MODEL_DIR / "qwen3_asr_llm.f16.gguf"
 OUTPUT_MODEL = MODEL_DIR / f"qwen3_asr_llm.{QUANTIZE_TYPE}.gguf"

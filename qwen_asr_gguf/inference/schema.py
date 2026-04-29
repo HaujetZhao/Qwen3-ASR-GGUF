@@ -64,10 +64,10 @@ class AlignerConfig:
     """对齐引擎配置"""
     model_dir: str
     # 拆分为 Frontend 和 Backend
-    encoder_frontend_fn: str = "qwen3_aligner_encoder_frontend.int4.onnx"
-    encoder_backend_fn: str = "qwen3_aligner_encoder_backend.int4.onnx"
+    encoder_frontend_fn: str = "qwen3_aligner_encoder_frontend.fp16.onnx"
+    encoder_backend_fn: str = "qwen3_aligner_encoder_backend.fp16.onnx"
     
-    llm_fn: str = "qwen3_aligner_llm.q4_k.gguf" 
+    llm_fn: str = "qwen3_aligner_llm.q5_k.gguf" 
     onnx_provider: str = 'CPU'  # CPU, CUDA, DML, TensorRT
     llm_use_gpu: bool = True
     n_ctx: int = 2048       # 对于 Aligner Decoder，每秒音频+文字，约占 30 个 token
@@ -77,9 +77,9 @@ class AlignerConfig:
 class ASREngineConfig:
     """ASR 识别引擎配置"""
     model_dir: str
-    encoder_frontend_fn: str = "qwen3_asr_encoder_frontend.int4.onnx"
-    encoder_backend_fn: str = "qwen3_asr_encoder_backend.int4.onnx"
-    llm_fn: str = "qwen3_asr_llm.q4_k.gguf"
+    encoder_frontend_fn: str = "qwen3_asr_encoder_frontend.fp16.onnx"
+    encoder_backend_fn: str = "qwen3_asr_encoder_backend.fp16.onnx"
+    llm_fn: str = "qwen3_asr_llm.q5_k.gguf"
 
     onnx_provider: str = 'CPU'  # CPU, CUDA, DML, TensorRT
     llm_use_gpu: bool = True
